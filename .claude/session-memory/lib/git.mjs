@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { run, fail } from './core.mjs';
 
@@ -42,7 +42,13 @@ export function sourceSnapshot(root) {
   for (const filePath of new Set([...tracked, ...untracked])) {
     if (filePath.startsWith('.claude/session-memory/runtime/')) continue;
     const absolutePath = join(root, filePath);
-    if (existsSync(absolutePath)) files[filePath] = hashFile(absolutePath);
+    // git ls-files inclui symlinks como uma única entrada, mas existsSync/readFileSync
+    // seguem o link — se ele apontar para um diretório (ex.: pacote pip que registra
+    // sua própria pasta de skills), readFileSync lança EISDIR. Só faz hash de arquivos
+    // regulares de verdade.
+    if (existsSync(absolutePath) && statSync(absolutePath).isFile()) {
+      files[filePath] = hashFile(absolutePath);
+    }
   }
   const branchResult = git(['symbolic-ref', '--quiet', '--short', 'HEAD'], root, { allowFailure: true });
   return {
