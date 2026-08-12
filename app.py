@@ -66,6 +66,14 @@ DEMO_COMMENT_TEMPLATES_SHALLOW = [
 ]
 DEMO_FIRST_NAMES_F = ["Maria", "Ana", "Juliana", "Camila"]
 DEMO_FIRST_NAMES_M = ["Joao", "Pedro", "Lucas", "Gabriel"]
+DEMO_CAPTION_TEMPLATES_ORGANIC = [
+    "Bom dia! Look de hoje ✨",
+    "Feliz com esse ensaio 💛 sem filtro",
+]
+DEMO_CAPTION_TEMPLATES_SPONSORED = [
+    "Parceria com @marca_fashion_demo — usem o cupom DODO10 #publi",
+    "Amei esse vestido da @outra_marca_demo, super confortável #ad",
+]
 
 
 def _normalize_username(raw_input):
@@ -104,12 +112,15 @@ def demo_fetch_fn(username, cookies=None):
             comments.append(_make_demo_comment(rng, username_hint=repeater))
         for _ in range(max(num_comments - len(repeaters_here), 0)):
             comments.append(_make_demo_comment(rng))
+        is_sponsored = i % 3 == 0
+        caption = rng.choice(DEMO_CAPTION_TEMPLATES_SPONSORED if is_sponsored else DEMO_CAPTION_TEMPLATES_ORGANIC)
+        shortcode = f"demo{username}{i}"
         posts.append(
             {
                 "post_id": f"demo_post_{i}",
                 "likes_count": rng.randint(200, 2000),
                 "comments_count": len(comments),
-                "raw": {"comments": comments},
+                "raw": {"comments": comments, "caption": caption, "shortcode": shortcode},
             }
         )
     return {
@@ -184,6 +195,7 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
 
         qualified_comments = [c for c in all_comments_flat if not filters.is_shallow_comment(c.get("texto", ""))]
         total_comentarios = len(all_comments_flat)
+        publis_detectadas = filters.detect_sponsored_posts(posts)
 
         state["etapa"] = "demografia"
         state["progresso"] = PIPELINE_STEPS["demografia"][1]
@@ -241,7 +253,7 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
                 "top_repetidores": pod_result["top_repetidores"],
                 "taxa_resposta_criadora": response_rate,
             },
-            "publis": [],
+            "publis": publis_detectadas,
             "comentarios_analisados": {
                 "total": total_comentarios,
                 "qualificados": len(qualified_comments),

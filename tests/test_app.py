@@ -1,5 +1,6 @@
 import os
 import sys
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -80,6 +81,26 @@ def test_app_demo_pipeline_runs_end_to_end_without_gemini_api_key(monkeypatch):
     assert not at.exception
     assert at.session_state["pipeline_state"]["status"] == "concluido"
     assert at.session_state["pipeline_state"]["gemini_configurado"] is False
+
+
+def test_run_pipeline_detects_sponsored_posts_in_demo_mode():
+    """RF-09: em Modo Demonstração, ao menos uma publi de exemplo deve ser
+    detectada nas legendas geradas localmente (prova de que o pipeline real
+    de detecção está conectado, não um placeholder fixo)."""
+    import app
+
+    # Username único: scrape_profile usa o cache SQLite compartilhado
+    # (database.DB_PATH) por padrão, e um username fixo colidiria com cache
+    # de execuções anteriores deste mesmo teste.
+    username = f"perfil_demo_publis_{uuid.uuid4().hex}"
+    state = {}
+    app._run_pipeline(username, 90, True, None, state)
+
+    assert state["status"] == "concluido"
+    publis = state["analysis"]["publis"]
+    assert len(publis) >= 1
+    assert all("termos" in item and item["termos"] for item in publis)
+    assert all(item["link"] is None or item["link"].startswith("https://www.instagram.com/p/") for item in publis)
 
 
 def test_run_pipeline_sets_erro_coleta_indisponivel_status(monkeypatch):
