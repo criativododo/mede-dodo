@@ -116,6 +116,60 @@ def test_run_pipeline_exposes_genero_pct_in_demo_mode():
     assert abs(sum(genero_pct.values()) - 1.0) < 1e-9
 
 
+def test_run_pipeline_filters_posts_outside_window_and_infers_gender_from_handle_in_real_mode(monkeypatch):
+    """Prova de integração do reparo de ancoragem na realidade física: em modo
+    real (demo_mode=False), posts fora da janela selecionada não devem
+    contribuir para as métricas, e o gênero deve ser inferido a partir do
+    @handle do comentarista quando não há 'nome' explícito — comentários
+    reais (via instaloader_fetch_fn) só trazem 'username', nunca 'nome'."""
+    import datetime as dt
+
+    import app
+
+    recent_date = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=5)).isoformat()
+    old_date = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=200)).isoformat()
+
+    fake_cached = {
+        "profile": {"followers_count": 10000},
+        "posts": [
+            {
+                "post_id": "1",
+                "likes_count": 100,
+                "comments_count": 1,
+                "raw": {
+                    "shortcode": "sc1",
+                    "caption": "look de hoje",
+                    "published_at": recent_date,
+                    "comments": [{"username": "ana_silva92", "texto": "Quanto custa?", "respondido": False}],
+                },
+            },
+            {
+                "post_id": "2",
+                "likes_count": 999,
+                "comments_count": 5,
+                "raw": {
+                    "shortcode": "sc2",
+                    "caption": "look antigo",
+                    "published_at": old_date,
+                    "comments": [{"username": "joao99", "texto": "Top", "respondido": False}],
+                },
+            },
+        ],
+    }
+
+    monkeypatch.setattr(app.scraper, "scrape_profile", lambda *args, **kwargs: fake_cached)
+
+    state = {}
+    app._run_pipeline("perfil_real_teste", 90, False, None, state)
+
+    assert state["status"] == "concluido"
+    analysis = state["analysis"]
+    # post de 200 dias atrás está fora da janela de 90 dias -> não conta nas métricas
+    assert analysis["comentarios_analisados"]["total"] == 1
+    # gênero inferido a partir do handle 'ana_silva92' -> 'ana' -> feminino
+    assert analysis["demografia"]["genero_predominante"] == "feminino"
+
+
 def test_erro_coleta_indisponivel_shows_exact_required_message():
     """A mensagem de erro de coleta real deve ser exatamente a exigida — nunca
     deve sugerir 'Modo demonstração' como alternativa a dados reais."""

@@ -16,6 +16,7 @@ import random
 import re
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
@@ -148,6 +149,27 @@ def _genero_predominante(contagem):
     return "misto"
 
 
+def _post_within_window(post, window_days):
+    published_at = (post.get("raw") or {}).get("published_at")
+    if not published_at:
+        # Sem data real conhecida (Modo Demonstração, ou cache legado anterior a
+        # esse campo) — mantém o post, não descarta por falta de informação.
+        return True
+    try:
+        post_dt = datetime.fromisoformat(published_at)
+    except ValueError:
+        return True
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    return post_dt >= cutoff
+
+
+def _filter_posts_in_window(posts, window_days):
+    """RF-02: a janela de análise (30/60/90 dias) deve refletir a data real de
+    publicação dos posts no Instagram, não apenas quando foram raspados/cacheados
+    (isso já é tratado à parte por database.get_cached_data)."""
+    return [post for post in posts if _post_within_window(post, window_days)]
+
+
 def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
     """Roda em thread de background. Só mexe em `state` (dict puro), nunca em widgets `st.*`."""
     try:
@@ -180,7 +202,7 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
             state["erro"] = str(exc)
             return
 
-        posts = cached.get("posts", [])
+        posts = _filter_posts_in_window(cached.get("posts", []), window_days)
         followers_count = cached.get("profile", {}).get("followers_count") or 0
 
         state["etapa"] = "filtragem"
@@ -212,7 +234,9 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
         genero_contagem = {"feminino": 0, "masculino": 0, "indeterminado": 0}
         regioes = []
         for c in all_comments_flat:
-            nome = c.get("nome") or "desconhecido"
+            # Comentários reais (instaloader_fetch_fn) só trazem 'username' — sem
+            # 'nome' explícito, deriva um candidato a primeiro nome do @handle.
+            nome = c.get("nome") or demographics.extract_first_name_from_handle(c.get("username")) or "desconhecido"
             genero = demographics.infer_gender(nome, names_db=names_db)
             genero_contagem[genero] = genero_contagem.get(genero, 0) + 1
             regiao_result = demographics.infer_region(c.get("texto", ""), ddd_to_uf=ddd_to_uf)
