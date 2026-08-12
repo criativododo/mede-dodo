@@ -23,3 +23,33 @@
     Streamlit com pipeline em thread de background, Modo Demonstração).
 - Suíte de testes: 28 → 43 → 57 → 61 testes, sempre verde, ao longo das rodadas acima.
 - MVP funcional de ponta a ponta em Modo Demonstração (sem rede real).
+
+## 2026-08-12 (sprint de integração dos conectores reais)
+- Execução em paralelo (2 subagentes concorrentes) de:
+  - **ISSUE-0002/bugfix**: correção do falso positivo de região "para" (preposição) → PA
+    (Pará) em `src/demographics.py`: `infer_region` só casa "PA" por menção quando a palavra
+    aparece acentuada ("pará") no texto original, não na forma normalizada sem acento.
+  - **ISSUE-0001**: `instaloader_fetch_fn` real (`src/scraper.py`, lib `instaloader`, sessão
+    local por arquivo de cookies) e novo fallback gracioso de `scrape_profile` (tenta cache
+    salvo sem filtro de janela antes de levantar `ScraperUnavailableError`).
+  - **ISSUE-0003**: `RealGeminiClient` real (`src/gemini_analyzer.py`, SDK
+    `google.generativeai`, JSON estruturado via `response_mime_type`, conversão de
+    `ResourceExhausted` em `GeminiRateLimitError`); `requirements.txt` atualizado.
+  - Suíte de testes: 61 → 70 (cumulativo), sempre verde.
+- Integração dos dois conectores no pipeline de `app.py`: `RealGeminiClient()` instanciado
+  quando o Modo Demonstração está desligado e `GEMINI_API_KEY` está definida (com
+  tratamento gracioso de `RuntimeError` quando a chave falta); `scraper.instaloader_fetch_fn`
+  usado como `fetch_fn` real fora do Modo Demonstração, com `cookies` lido da variável de
+  ambiente `INSTAGRAM_SESSION_FILE`; novo status de UI `erro_coleta_indisponivel` para
+  `scraper.ScraperUnavailableError`, exibido via `st.error` sem quebrar o app.
+- Encontrado e corrigido, via TDD, um bug real em `src/exporter.py`: `generate_pdf_report`
+  lançava `FPDFException: Not enough horizontal space to render a single character` ao
+  renderizar 2 ou mais itens do Gemini (ou de publis), porque os `multi_cell` dentro desses
+  loops não passavam `new_x`/`new_y` explícitos como o resto do arquivo — o cursor ficava
+  perto da margem direita e a próxima célula de largura automática não cabia. Corrigido
+  adicionando `new_x="LMARGIN", new_y="NEXT"` nos dois loops.
+- Suíte de testes: 70 → 74 (2 testes novos de integração em `tests/test_app.py`, 2 testes de
+  regressão do bug de PDF em `tests/test_exporter.py`), sempre verde.
+- Documentação (`SPEC-001.md`, `DUMMY.md`, `PROGRESS.md`, `docs/issues/manifest.json`)
+  atualizada para refletir a integração real concluída, mantendo como pendência explícita a
+  validação com credenciais reais (Instagram e Gemini), indisponíveis neste ambiente.

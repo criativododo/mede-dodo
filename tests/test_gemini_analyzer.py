@@ -146,3 +146,58 @@ def test_analyze_comments_reports_quota_exceeded_batch_without_raising():
     assert result["items"] == []
     assert result["failed_batches"] == 1
     assert result["dropped"] == []
+
+
+def test_real_gemini_client_without_api_key_raises_clear_error(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    try:
+        gemini_analyzer.RealGeminiClient()
+        assert False, "esperava erro por falta de GEMINI_API_KEY"
+    except RuntimeError as exc:
+        assert "GEMINI_API_KEY" in str(exc)
+
+
+def test_real_gemini_client_converts_sdk_rate_limit_error(monkeypatch):
+    from google.api_core.exceptions import ResourceExhausted
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    class FakeSdkModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def generate_content(self, prompt):
+            raise ResourceExhausted("cota gratuita excedida")
+
+    monkeypatch.setattr(gemini_analyzer.genai, "configure", lambda **kwargs: None)
+    monkeypatch.setattr(gemini_analyzer.genai, "GenerativeModel", FakeSdkModel)
+
+    client = gemini_analyzer.RealGeminiClient()
+
+    try:
+        client.generate_content("prompt qualquer")
+        assert False, "esperava GeminiRateLimitError"
+    except gemini_analyzer.GeminiRateLimitError:
+        pass
+
+
+def test_real_gemini_client_requests_structured_json_response(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    captured = {}
+
+    class FakeSdkModel:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        def generate_content(self, prompt):
+            return FakeResponse("[]")
+
+    monkeypatch.setattr(gemini_analyzer.genai, "configure", lambda **kwargs: None)
+    monkeypatch.setattr(gemini_analyzer.genai, "GenerativeModel", FakeSdkModel)
+
+    gemini_analyzer.RealGeminiClient()
+
+    generation_config = captured["kwargs"]["generation_config"]
+    assert generation_config.response_mime_type == "application/json"

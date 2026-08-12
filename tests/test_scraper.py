@@ -126,3 +126,118 @@ def test_scrape_profile_raises_without_fetch_fn_when_no_cache():
             pass
     finally:
         os.unlink(db_path)
+
+
+def test_get_cached_data_with_window_days_none_ignores_cutoff():
+    db_path = make_temp_db()
+    try:
+        database.save_profile_data(
+            "perfil_qualquer_idade",
+            posts=[],
+            bio="bio",
+            followers_count=1,
+            db_path=db_path,
+        )
+
+        cached = database.get_cached_data("perfil_qualquer_idade", window_days=None, db_path=db_path)
+
+        assert cached is not None
+        assert cached["profile"]["username"] == "perfil_qualquer_idade"
+    finally:
+        os.unlink(db_path)
+
+
+def test_scrape_profile_falls_back_to_cache_when_fetch_fails_and_cache_exists():
+    db_path = make_temp_db()
+    try:
+        database.save_profile_data(
+            "perfil_fallback",
+            posts=[{"post_id": "1", "raw": {}, "likes_count": 5, "comments_count": 1}],
+            bio="bio antiga",
+            followers_count=300,
+            db_path=db_path,
+        )
+
+        def fetch_fn_network_error(username, cookies):
+            raise ConnectionError("instagram bloqueou a coleta")
+
+        # window_days=0 força o cache existente (salvo um instante atrás) a ficar
+        # fora da janela estrita na primeira checagem, simulando "cache desatualizado".
+        result = scraper.scrape_profile(
+            "perfil_fallback",
+            window_days=0,
+            fetch_fn=fetch_fn_network_error,
+            throttle_fn=lambda: None,
+            db_path=db_path,
+        )
+
+        assert result is not None
+        assert result["profile"]["username"] == "perfil_fallback"
+        assert result["profile"]["followers_count"] == 300
+    finally:
+        os.unlink(db_path)
+
+
+def test_scrape_profile_raises_scraper_unavailable_error_when_fetch_fails_and_no_cache():
+    db_path = make_temp_db()
+    try:
+        def fetch_fn_network_error(username, cookies):
+            raise ConnectionError("instagram bloqueou a coleta")
+
+        try:
+            scraper.scrape_profile(
+                "perfil_sem_cache_nenhum",
+                window_days=90,
+                fetch_fn=fetch_fn_network_error,
+                throttle_fn=lambda: None,
+                db_path=db_path,
+            )
+            assert False, "esperava ScraperUnavailableError"
+        except scraper.ScraperUnavailableError:
+            pass
+    finally:
+        os.unlink(db_path)
+
+
+def test_instaloader_fetch_fn_maps_profile_and_posts_without_network(monkeypatch):
+    class FakePost:
+        def __init__(self, mediaid, shortcode, caption, likes, comments):
+            self.mediaid = mediaid
+            self.shortcode = shortcode
+            self.caption = caption
+            self.likes = likes
+            self.comments = comments
+
+    class FakeProfile:
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            return iter([FakePost(1, "abc", "legenda", 10, 2)])
+
+    class FakeContext:
+        pass
+
+    class FakeInstaloader:
+        def __init__(self):
+            self.context = FakeContext()
+            self.loaded_session = None
+
+        def load_session_from_file(self, username, filename):
+            self.loaded_session = (username, filename)
+
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", FakeInstaloader)
+    monkeypatch.setattr(
+        scraper.instaloader.Profile,
+        "from_username",
+        staticmethod(lambda context, username: FakeProfile()),
+    )
+
+    result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    assert result["bio"] == "bio fake"
+    assert result["followers_count"] == 1234
+    assert result["posts"][0]["post_id"] == "1"
+    assert result["posts"][0]["likes_count"] == 10
+    assert result["posts"][0]["comments_count"] == 2

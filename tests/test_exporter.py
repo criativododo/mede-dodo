@@ -105,3 +105,38 @@ def test_generate_pdf_report_handles_empty_optional_collections():
 
     assert isinstance(pdf_bytes, (bytes, bytearray))
     assert bytes(pdf_bytes).startswith(b"%PDF")
+
+
+def test_generate_pdf_report_handles_multiple_publis_items():
+    """Mesma classe de regressão do teste de gemini_items, para o loop de publis
+    (RF-09 ainda é placeholder em app.py, mas o exporter é genérico e aceita
+    qualquer lista aqui)."""
+    analysis = make_analysis()
+    analysis["publis"] = [
+        "Post patrocinado — Marca A — 12/07",
+        "Post patrocinado — Marca B — 20/07",
+        "Post patrocinado — Marca C — 02/08",
+    ]
+
+    pdf_bytes = exporter.generate_pdf_report(analysis)
+
+    assert isinstance(pdf_bytes, (bytes, bytearray))
+    assert bytes(pdf_bytes).startswith(b"%PDF")
+
+
+def test_generate_pdf_report_handles_multiple_gemini_items():
+    """Regressão: com 2+ itens do Gemini, cada `multi_cell` sem new_x/new_y
+    explícitos deixava o cursor perto da margem direita, e o próximo multi_cell
+    (largura automática até a margem) estourava com FPDFException
+    'Not enough horizontal space to render a single character'."""
+    analysis = make_analysis()
+    analysis["comentarios_analisados"]["gemini_items"] = [
+        {"comentario": "Qual o preço desse vestido?", "intencao_compra": "alta", "faixa_etaria_estimada": "25-34"},
+        {"comentario": "Vocês têm no tamanho M?", "intencao_compra": "media", "faixa_etaria_estimada": "18-24"},
+        {"comentario": "Chega até Belo Horizonte?", "intencao_compra": "baixa", "faixa_etaria_estimada": "desconhecida"},
+    ]
+
+    pdf_bytes = exporter.generate_pdf_report(analysis)
+
+    assert isinstance(pdf_bytes, (bytes, bytearray))
+    assert bytes(pdf_bytes).startswith(b"%PDF")

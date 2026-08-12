@@ -9,9 +9,23 @@
 5. **NUNCA apagar o cache local sem autorização do usuário:** As análises salvas no SQLite `data/cache.db` devem ser mantidas para consulta offline.
 
 ## Verificação (2026-08-12)
-Regras conferidas contra a implementação atual:
-- Regra 1: `app.py` roda o pipeline em `threading.Thread` de background; a UI só faz polling/rerun, nunca `thread.join()` bloqueante.
-- Regra 2: `app.py` só envia `qualified_comments` (pós `filters.is_shallow_comment`) para `gemini_analyzer.analyze_comments`.
-- Regra 3: `scraper.throttle` (jitter 2-5s) roda antes de qualquer `fetch_fn`; nenhum código faz raspagem em loop sem essa chamada.
-- Regra 4: nenhuma dependência paga em `requirements.txt` (`streamlit`, `fpdf2`, `pytest` — todas open-source).
-- Regra 5: nenhuma rotina do projeto apaga `data/cache.db`; não há função de limpeza de cache implementada.
+Regras reconferidas após a integração dos conectores reais (`instaloader_fetch_fn` e
+`RealGeminiClient`) ao pipeline de `app.py`:
+- Regra 1: `app.py` continua rodando o pipeline em `threading.Thread` de background; a UI
+  só faz polling/rerun (`time.sleep(0.3)` + `st.rerun()`), nunca `thread.join()` bloqueante.
+  A troca do `fetch_fn` de demonstração pelo `scraper.instaloader_fetch_fn` real não mudou
+  essa arquitetura — a chamada de rede real também roda dentro da mesma thread de fundo.
+- Regra 2: `app.py` continua só enviando `qualified_comments` (pós
+  `filters.is_shallow_comment`) para `gemini_analyzer.analyze_comments`, agora com o
+  `RealGeminiClient` real como `client` quando `GEMINI_API_KEY` está configurada — nenhum
+  comentário raso chega a ser formatado no prompt do Gemini.
+- Regra 3: `scraper.throttle` (jitter 2-5s) roda antes de qualquer `fetch_fn` real; em Modo
+  Demonstração o throttle é substituído por um no-op (`lambda: None`), correto, pois não há
+  requisição de rede a proteger nesse modo.
+- Regra 4: nenhuma dependência paga em `requirements.txt` (`streamlit`, `fpdf2`, `pytest`,
+  `instaloader`, `google-generativeai` — todas open-source/SDK gratuito). O uso do
+  `google-generativeai` depende de uma `GEMINI_API_KEY` do plano gratuito do Google AI
+  Studio, nunca de um plano pago.
+- Regra 5: nenhuma rotina do projeto apaga `data/cache.db`; não há função de limpeza de
+  cache implementada. O novo fallback de `scraper.scrape_profile` (cache sem filtro de
+  janela quando a coleta real falha) só *lê* o cache, nunca apaga ou sobrescreve dados.

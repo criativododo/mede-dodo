@@ -86,7 +86,12 @@ def save_profile_data(username, posts, bio=None, followers_count=None, db_path=D
 def get_cached_data(username, window_days, db_path=DB_PATH):
     init_db(db_path=db_path)
     conn = get_connection(db_path)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+    # window_days=None = sem corte de idade: usado pelo fallback do scraper para
+    # recuperar qualquer cache salvo, mesmo fora da janela normalmente exigida.
+    if window_days is None:
+        cutoff = datetime.min.replace(tzinfo=timezone.utc).isoformat()
+    else:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
     profile_row = conn.execute(
         "SELECT * FROM profiles WHERE username = ? AND updated_at >= ?",
         (username, cutoff),

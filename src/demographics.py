@@ -96,9 +96,17 @@ def infer_region(text, ddd_to_uf=DEFAULT_DDD_TO_UF, region_keywords=DEFAULT_REGI
             por_ddd.append(uf)
 
     normalized = _normalize_text(text)
+    original_lower = text.lower()
     por_mencao = []
     for keyword, uf in region_keywords.items():
-        if re.search(rf"\b{re.escape(keyword)}\b", normalized) and uf not in por_mencao:
+        # "para" sem acento é uma preposição comum, indistinguível de "Pará" após
+        # normalizar acentos — só conta como menção ao estado se o acento sobreviver
+        # no texto original ("pará").
+        if keyword == "para":
+            matched = re.search(r"\bpará\b", original_lower)
+        else:
+            matched = re.search(rf"\b{re.escape(keyword)}\b", normalized)
+        if matched and uf not in por_mencao:
             por_mencao.append(uf)
 
     return {"por_ddd": por_ddd, "por_mencao": por_mencao}

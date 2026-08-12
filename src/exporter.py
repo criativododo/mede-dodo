@@ -231,7 +231,7 @@ def generate_pdf_report(analysis: dict) -> bytes:
     pdf.set_font("helvetica", "I", 11)
     if publis:
         for item in publis:
-            pdf.multi_cell(0, 7, _pdf_safe(f"- {item}"))
+            pdf.multi_cell(0, 7, _pdf_safe(f"- {item}"), new_x="LMARGIN", new_y="NEXT")
     else:
         pdf.multi_cell(0, 7, _pdf_safe(PUBLIS_PLACEHOLDER_MSG))
     pdf.ln(2)
@@ -253,7 +253,7 @@ def generate_pdf_report(analysis: dict) -> bytes:
                 f"- {item.get('comentario', '')} | intencao: {item.get('intencao_compra', '')} "
                 f"| faixa etaria: {item.get('faixa_etaria_estimada', '')}"
             )
-            pdf.multi_cell(0, 6, _pdf_safe(texto))
+            pdf.multi_cell(0, 6, _pdf_safe(texto), new_x="LMARGIN", new_y="NEXT")
     else:
         pdf.multi_cell(0, 6, _pdf_safe(GEMINI_NAO_CONFIGURADO_MSG))
 

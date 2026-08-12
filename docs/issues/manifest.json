@@ -5,7 +5,7 @@
       "title": "Módulo de Coleta Local e Cache SQLite",
       "status": "parcial",
       "file": "docs/issues/ISSUE-0001.md",
-      "notas": "Cache SQLite, throttling e orquestração implementados e testados (6/6 testes). fetch_fn real de raspagem do Instagram pendente de issue de integração subsequente."
+      "notas": "Cache SQLite, throttling e orquestração implementados e testados. instaloader_fetch_fn real (sessão local por arquivo de cookies) implementado e integrado ao pipeline de app.py como fetch_fn fora do Modo Demonstração, com fallback gracioso de cache (ScraperUnavailableError tratado na UI). Status permanece 'parcial' apenas porque a validação com sessão/cookies reais do Instagram não foi feita neste ambiente (sem rede/credenciais disponíveis)."
     },
     {
       "id": "ISSUE-0002",
@@ -19,14 +19,14 @@
       "title": "Processamento Gemini em Lote",
       "status": "parcial",
       "file": "docs/issues/ISSUE-0003.md",
-      "notas": "src/gemini_analyzer.py implementado e testado com cliente mockado (10/10 testes). Integração real com SDK do Gemini pendente. Índice de repetição/pods deliberadamente fora do schema (ver ISSUE-0003.md) — cálculo local entregue na ISSUE-0005."
+      "notas": "src/gemini_analyzer.py implementado e testado com cliente mockado. RealGeminiClient real (SDK google.generativeai, JSON estruturado, GeminiRateLimitError para cota) implementado e integrado ao pipeline de app.py (instanciado quando GEMINI_API_KEY está definida; ausência tratada graciosamente). Status permanece 'parcial' apenas porque a chamada real à API não foi testada neste ambiente (sem GEMINI_API_KEY disponível). Índice de repetição/pods deliberadamente fora do schema (ver ISSUE-0003.md) — cálculo local entregue na ISSUE-0005."
     },
     {
       "id": "ISSUE-0004",
       "title": "Dashboard Streamlit e Exportador",
-      "status": "parcial",
+      "status": "concluida",
       "file": "docs/issues/ISSUE-0004.md",
-      "notas": "app.py (pipeline em thread de background, Modo Demonstração, cards, export HTML/PDF) e src/exporter.py implementados e testados (11/11 testes; 61/61 na suíte completa). Boot real validado via AppTest. Depende de ISSUE-0001/0003 para sair do Modo Demonstração; RF-09 (publis) é placeholder."
+      "notas": "app.py (pipeline em thread de background, Modo Demonstração, cards, export HTML/PDF, conectores reais de scraper e Gemini integrados) e src/exporter.py implementados e testados (74/74 na suíte completa). Boot real validado via AppTest. Bug real de PDF corrigido via TDD (FPDFException ao renderizar 2+ itens do Gemini/publis por multi_cell sem new_x/new_y explícitos em loop). RF-09 (publis) segue placeholder explícito, fora do escopo desta issue."
     },
     {
       "id": "ISSUE-0005",

@@ -11,6 +11,7 @@ thread principal apenas faz polling/rerun para atualizar a barra de progresso,
 nunca bloqueia esperando a raspagem terminar.
 """
 
+import os
 import random
 import re
 import threading
@@ -19,7 +20,7 @@ import time
 import streamlit as st
 
 from src import data_loaders, database, demographics, exporter, filters, metrics, scoring, scraper
-from src.gemini_analyzer import analyze_comments
+from src.gemini_analyzer import RealGeminiClient, analyze_comments
 
 st.set_page_config(page_title="métricaDODÔ", page_icon="📊", layout="wide")
 
@@ -30,6 +31,12 @@ RASPAGEM_NAO_IMPLEMENTADA_MSG = (
     "(dívida técnica conhecida — ver docs/issues/ISSUE-0001.md). "
     "Ative o \"Modo demonstração\" abaixo para rodar o pipeline completo "
     "com dados fictícios gerados localmente, sem rede."
+)
+
+COLETA_INDISPONIVEL_MSG_TEMPLATE = (
+    "Não foi possível coletar dados reais agora: {erro} Tente novamente mais "
+    "tarde ou use o \"Modo demonstração\" para validar o pipeline sem "
+    "depender de rede."
 )
 
 PIPELINE_STEPS = {
@@ -131,18 +138,29 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
         state["etapa"] = "coleta"
         state["progresso"] = PIPELINE_STEPS["coleta"][1]
 
-        fetch_fn = demo_fetch_fn if demo_mode else None
+        fetch_fn = demo_fetch_fn if demo_mode else scraper.instaloader_fetch_fn
         # DUMMY.md #3 (throttling 2-5s) só faz sentido para requisições de rede reais.
         # Em modo demonstração não há nenhuma requisição a proteger, então usamos um
-        # throttle_fn instantâneo; a raspagem real (quando existir) continua usando o
-        # jitter padrão de src/scraper.py.
+        # throttle_fn instantâneo; a raspagem real usa o jitter padrão de src/scraper.py.
         throttle_fn = scraper.throttle if not demo_mode else (lambda: None)
+        # Caminho de um arquivo de sessão local salvo via Instaloader (login manual
+        # único, fora deste código) — sem isso, a coleta real ainda tenta rodar sem
+        # sessão e cai no fallback de cache/erro tratado abaixo se falhar.
+        cookies = None if demo_mode else os.environ.get("INSTAGRAM_SESSION_FILE")
         try:
             cached = scraper.scrape_profile(
-                username, window_days=window_days, fetch_fn=fetch_fn, throttle_fn=throttle_fn
+                username,
+                window_days=window_days,
+                fetch_fn=fetch_fn,
+                throttle_fn=throttle_fn,
+                cookies=cookies,
             )
         except NotImplementedError:
             state["status"] = "erro_scraping_nao_implementado"
+            return
+        except scraper.ScraperUnavailableError as exc:
+            state["status"] = "erro_coleta_indisponivel"
+            state["erro"] = str(exc)
             return
 
         posts = cached.get("posts", [])
@@ -342,10 +360,18 @@ def main():
         if not username:
             st.warning("Informe um @perfil ou URL do Instagram válido antes de analisar.")
         else:
+            gemini_client = None
+            if not demo_mode:
+                try:
+                    gemini_client = RealGeminiClient()
+                except RuntimeError:
+                    # GEMINI_API_KEY ausente: segue sem Gemini, tratado graciosamente
+                    # na UI via GEMINI_NAO_CONFIGURADO_MSG — nunca derruba o pipeline.
+                    gemini_client = None
             st.session_state.pipeline_state = {"status": "rodando", "etapa": "coleta", "progresso": 0.0}
             thread = threading.Thread(
                 target=_run_pipeline,
-                args=(username, window_days, demo_mode, None, st.session_state.pipeline_state),
+                args=(username, window_days, demo_mode, gemini_client, st.session_state.pipeline_state),
                 daemon=True,
             )
             st.session_state.pipeline_thread = thread
@@ -364,6 +390,8 @@ def main():
         st.rerun()
     elif status == "erro_scraping_nao_implementado":
         st.warning(RASPAGEM_NAO_IMPLEMENTADA_MSG)
+    elif status == "erro_coleta_indisponivel":
+        st.error(COLETA_INDISPONIVEL_MSG_TEMPLATE.format(erro=state.get("erro", "erro desconhecido")))
     elif status == "erro":
         st.error(f"Falha ao processar o pipeline: {state.get('erro', 'erro desconhecido')}")
     elif status == "concluido":

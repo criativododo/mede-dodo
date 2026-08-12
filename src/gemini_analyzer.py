@@ -1,4 +1,8 @@
 import json
+import os
+
+import google.generativeai as genai
+from google.api_core.exceptions import ResourceExhausted
 
 DEFAULT_MAX_BATCH_SIZE = 100
 DEFAULT_MAX_BATCHES = 2
@@ -45,6 +49,31 @@ Comentários:
 def build_batch_prompt(batch):
     comentarios = "\n".join(f"- {comentario}" for comentario in batch)
     return PROMPT_TEMPLATE.format(comentarios=comentarios)
+
+
+class RealGeminiClient:
+    """Client real do Gemini via SDK oficial google.generativeai, com o mesmo
+    contrato duck-typed (generate_content -> objeto com .text) usado por analyze_batch."""
+
+    def __init__(self, model_name="gemini-1.5-flash", api_key=None):
+        api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "GEMINI_API_KEY não definida no ambiente. Defina essa variável com uma "
+                "chave válida do Google AI Studio antes de usar RealGeminiClient."
+            )
+
+        genai.configure(api_key=api_key)
+        self._model = genai.GenerativeModel(
+            model_name=model_name,
+            generation_config=genai.types.GenerationConfig(response_mime_type="application/json"),
+        )
+
+    def generate_content(self, prompt):
+        try:
+            return self._model.generate_content(prompt)
+        except ResourceExhausted as exc:
+            raise GeminiRateLimitError(str(exc)) from exc
 
 
 def analyze_batch(client, batch):

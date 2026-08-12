@@ -64,3 +64,26 @@ def test_infer_region_returns_empty_lists_when_no_match():
     )
 
     assert result == {"por_ddd": [], "por_mencao": []}
+
+
+PARA_REGION_KEYWORDS = {"para": "PA", "bahia": "BA"}
+
+
+def test_infer_region_does_not_match_preposition_para_as_state():
+    result = demographics.infer_region(
+        "amei, vim aqui para comprar",
+        ddd_to_uf=CUSTOM_DDD_TO_UF,
+        region_keywords=PARA_REGION_KEYWORDS,
+    )
+
+    assert "PA" not in result["por_mencao"]
+
+
+def test_infer_region_matches_para_state_when_accented_in_original_text():
+    result = demographics.infer_region(
+        "moro no Pará, amei a peça",
+        ddd_to_uf=CUSTOM_DDD_TO_UF,
+        region_keywords=PARA_REGION_KEYWORDS,
+    )
+
+    assert "PA" in result["por_mencao"]
