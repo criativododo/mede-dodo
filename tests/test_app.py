@@ -103,6 +103,19 @@ def test_run_pipeline_detects_sponsored_posts_in_demo_mode():
     assert all(item["link"] is None or item["link"].startswith("https://www.instagram.com/p/") for item in publis)
 
 
+def test_run_pipeline_exposes_genero_pct_in_demo_mode():
+    import app
+
+    username = f"perfil_demo_genero_{uuid.uuid4().hex}"
+    state = {}
+    app._run_pipeline(username, 90, True, None, state)
+
+    assert state["status"] == "concluido"
+    genero_pct = state["analysis"]["demografia"]["genero_pct"]
+    assert set(genero_pct.keys()) == {"feminino", "masculino", "indeterminado"}
+    assert abs(sum(genero_pct.values()) - 1.0) < 1e-9
+
+
 def test_erro_coleta_indisponivel_shows_exact_required_message():
     """A mensagem de erro de coleta real deve ser exatamente a exigida — nunca
     deve sugerir 'Modo demonstração' como alternativa a dados reais."""

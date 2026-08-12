@@ -129,6 +129,13 @@ def demo_fetch_fn(username, cookies=None):
     }
 
 
+def _genero_percentuais(contagem):
+    total = sum(contagem.values())
+    if total == 0:
+        return {"feminino": 0.0, "masculino": 0.0, "indeterminado": 0.0}
+    return {chave: valor / total for chave, valor in contagem.items()}
+
+
 def _genero_predominante(contagem):
     feminino = contagem.get("feminino", 0)
     masculino = contagem.get("masculino", 0)
@@ -245,6 +252,7 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
             "engagement_rate": engagement_rate,
             "demografia": {
                 "genero_predominante": _genero_predominante(genero_contagem),
+                "genero_pct": _genero_percentuais(genero_contagem),
                 "regioes": regioes,
             },
             "antifraude": {
@@ -288,7 +296,11 @@ def _render_metric_cards(analysis):
 def _render_demografia_card(analysis):
     st.subheader("Demografia da audiência")
     demografia = analysis["demografia"]
-    st.write(f"**Gênero predominante:** {demografia['genero_predominante']}")
+    pct_feminino = demografia.get("genero_pct", {}).get("feminino", 0.0) * 100
+    st.write(
+        f"**Gênero predominante:** {demografia['genero_predominante']} "
+        f"({pct_feminino:.1f}% feminino na amostra)"
+    )
     regioes = demografia["regioes"]
     st.write(f"**Regiões detectadas:** {', '.join(regioes) if regioes else 'Nenhuma região detectada'}")
 

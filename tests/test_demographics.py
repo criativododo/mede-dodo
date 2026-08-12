@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src import demographics
+from src import data_loaders, demographics
 
 CUSTOM_NAMES_DB = {
     "maria": {"F": 950, "M": 5},
@@ -87,3 +87,26 @@ def test_infer_region_matches_para_state_when_accented_in_original_text():
     )
 
     assert "PA" in result["por_mencao"]
+
+
+FEMALE_NAMES_FROM_SPEC = ["Maria", "Ana", "Camila", "Fernanda", "Juliana", "Patricia", "Sofia"]
+
+
+def test_infer_gender_classifies_spec_female_names_as_feminino_using_real_ibge_base():
+    """Prova de integração: o pipeline real (app.py -> data_loaders.load_names_db())
+    usa a base curada do IBGE, não o DEFAULT_NAMES_DB de exemplo. Perfis de
+    moda/lifestyle com comentaristas de nomes tipicamente femininos devem
+    classificar como 'feminino'."""
+    names_db = data_loaders.load_names_db()
+
+    for nome in FEMALE_NAMES_FROM_SPEC:
+        assert demographics.infer_gender(nome, names_db=names_db) == "feminino", nome
+
+
+def test_infer_gender_female_ratio_above_80_percent_for_spec_names_using_real_ibge_base():
+    names_db = data_loaders.load_names_db()
+
+    for nome in FEMALE_NAMES_FROM_SPEC:
+        counts = names_db[demographics._normalize_name(nome)]
+        total = counts["F"] + counts["M"]
+        assert counts["F"] / total > 0.80, nome
