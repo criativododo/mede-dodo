@@ -124,3 +124,27 @@
 - Suíte de testes: 122 → 131, sempre verde.
 - Documentação (`SPEC-001.md`, `PROGRESS.md`, `docs/issues/ISSUE-0001.md`,
   `docs/issues/manifest.json`) atualizada para refletir o reparo.
+
+## 2026-08-12 (validação ao vivo, por pedido explícito do usuário — resultado parcial)
+- Rodado `scraper.scrape_profile` contra `@silviabraz` e `@caroline_tanaka` de verdade
+  (sessão real `criativododo`, `cookies=None` → autodetecção), e a sidebar do Streamlit sem
+  nenhum mock — ambas as correções de sessão/identidade desta issue confirmadas funcionando
+  em ambiente real: sidebar mostrou `"Sessão ativa: criativododo"`; a requisição saiu
+  de fato autenticada, sem erro de identidade trocada.
+- A validação revisou a hipótese original sobre o Erro HTTP 400: não é falta de
+  autenticação. `Profile.from_username()` na versão instalada (`instaloader==4.15.3`) usa
+  sempre `api/v1/users/web_profile_info/`, autenticado ou não (confirmado lendo o
+  código-fonte da lib). `@silviabraz` reproduziu ao vivo o erro **exato** relatado pelo
+  usuário no pedido original (`ig_business_category_subvertical has been deleted`) — um bug
+  atual no backend do próprio Instagram nesse endpoint, fora do alcance de qualquer correção
+  no lado do cliente nesta versão da lib. `@caroline_tanaka` passou da etapa de perfil (não
+  afetada pelo bug de schema) mas falhou depois ao buscar comentários de um post
+  (`i.instagram.com/api/v1/media/.../comments/`, erro genérico "something went wrong" —
+  possível rate-limit, não confirmado como permanente com uma única tentativa).
+- Decisão: **merge para main NÃO realizado** — o critério definido pelo usuário
+  ("se a validação passar sem falhas") não foi atendido; as duas contas testadas falharam,
+  ainda que por uma causa diferente (e fora do nosso controle) da que motivou a correção.
+  Aguardando decisão do usuário sobre os próximos passos.
+- Documentação (`PROGRESS.md`, `docs/issues/ISSUE-0001.md`, `docs/issues/manifest.json`)
+  atualizada com o resultado real e honesto da validação, incluindo a correção da hipótese
+  anterior sobre GraphQL vs. `web_profile_info`.

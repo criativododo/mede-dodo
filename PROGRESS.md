@@ -20,12 +20,24 @@
   ANALISADO (ex. `silviabraz`) em vez do dono real dos cookies (ex. `criativododo`),
   extraído agora do próprio nome do arquivo de sessão; (3) sidebar do Streamlit mostra
   "Sessão ativa: `<usuario>`" ou avisa quando nenhuma sessão é detectada; (4) `instaloader`
-  estava ausente de `requirements.txt` (drift de dependência) — adicionado. Essas duas
-  causas explicam o Erro HTTP 400 relatado em perfis business/creator (requisição anônima
-  cai no endpoint público instável `web_profile_info`; sessão autenticada usa GraphQL). Ver
-  `docs/issues/ISSUE-0001.md` (seção "Reparo 2026-08-12") para o detalhamento completo,
-  incluindo a pendência explícita de validação com uma chamada real ao Instagram (não
-  disparada nesta sessão automatizada por prudência).
+  estava ausente de `requirements.txt` (drift de dependência) — adicionado. Ambos os bugs de
+  sessão foram **validados com uma chamada real** (não mockada) nesta sessão: a sidebar
+  mostrou corretamente "Sessão ativa: criativododo" e `instaloader_fetch_fn` de fato
+  autenticou e enviou a requisição com a sessão correta. **Porém a validação real revelou
+  que a hipótese original sobre a causa do Erro HTTP 400 estava incompleta**: lendo o código
+  -fonte da lib instalada (`instaloader==4.15.3`), `Profile.from_username()` usa **sempre**
+  o endpoint `api/v1/users/web_profile_info/`, autenticado ou não — não existe, nesta
+  versão, uma rota GraphQL alternativa acionada por login. O 400 observado ao vivo para
+  `@silviabraz` (`"Asset asset://laser.provider/ig_business_category_subvertical has been
+  deleted. You cannot use this schema"`) é um **bug atual no backend do próprio Instagram**
+  nesse endpoint, reproduzido de forma idêntica mesmo com sessão autenticada carregada
+  corretamente — está fora do alcance de qualquer correção no lado do cliente (Instaloader
+  não expõe, na versão pública mais recente, nenhum caminho alternativo em
+  `Profile.from_username`). `@caroline_tanaka` passou pela etapa de perfil sem erro, mas
+  falhou depois ao buscar comentários de um post via `i.instagram.com/api/v1/media/.../
+  comments/` (`"something went wrong"` genérico — possivelmente transitório/rate-limit).
+  Ver `docs/issues/ISSUE-0001.md` (seção "Validação real 2026-08-12") para o log completo e
+  as opções de próximo passo.
 - [x] **ISSUE-0002** — Filtragem Heurística e Demografia Local. `src/filters.py`
   (comentários rasos vs. alta intenção comercial) e `src/demographics.py` (gênero/região,
   interfaces injetáveis) prontos e testados. Bug do falso positivo "para" (preposição) → PA

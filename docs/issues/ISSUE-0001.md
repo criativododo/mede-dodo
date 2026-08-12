@@ -59,9 +59,63 @@ GraphQL, mais estável.
    mockada) de que `scraper.detect_available_session_username()` encontra de fato o arquivo
    `~/.config/instaloader/session-criativododo` presente nesta máquina — confirmando que a
    autodetecção funciona no ambiente real.
-- **Pendência explícita**: a chamada real a `Profile.from_username` contra o Instagram (ex.
-  `@silviabraz`, `@caroline_tanaka`) não foi disparada nesta sessão — evitado
+- **Pendência (à época)**: a chamada real a `Profile.from_username` contra o Instagram (ex.
+  `@silviabraz`, `@caroline_tanaka`) não havia sido disparada naquela sessão — evitado
   deliberadamente por ser uma ação de rede contra o Instagram usando a sessão real e
   autenticada do usuário (`criativododo`), fora do escopo de uma correção de código
-  automatizada sem supervisão ao vivo. Recomenda-se validar rodando
-  `.venv/bin/python -m streamlit run app.py` e analisando esses perfis manualmente.
+  automatizada sem supervisão ao vivo.
+
+## Validação real (2026-08-12, autorizada explicitamente pelo usuário) — resultado parcial
+Executada por pedido explícito do usuário: `scraper.scrape_profile("silviabraz", ...)` e
+`scraper.scrape_profile("caroline_tanaka", ...)`, ambos com `cookies=None` (autodetecção),
+`window_days=90`, `fetch_fn=scraper.instaloader_fetch_fn`, `throttle_fn=scraper.throttle`
+(script `validate_scraper.py`, fora do repositório).
+
+**Confirmado funcionando (os dois bugs desta issue estão corrigidos):**
+- Sidebar do Streamlit, sem nenhum mock, mostrou corretamente `"Sessão ativa: criativododo"`.
+- `scraper.detect_available_session_username()` encontrou o arquivo real
+  `~/.config/instaloader/session-criativododo` (390 bytes) nesta máquina.
+- A autodetecção de sessão em `instaloader_fetch_fn` carregou e usou a sessão correta (a
+  requisição real saiu autenticada como `criativododo`, não anônima, e não houve nenhum erro
+  de "identidade trocada"/sessão não encontrada).
+
+**Descoberta nova, que revisa a hipótese original sobre o Erro HTTP 400:**
+Lendo o código-fonte da lib instalada (`.venv/lib/python3.14/site-packages/instaloader/
+structures.py`, `Profile.from_username`, linhas ~993-1017), o comentário do próprio mantenedor
+diz: *"Resolve the profile through the web_profile_info endpoint, which works both anonymously
+and when logged in [...] The GraphQL fbsearch query previously used here started responding
+with HTTP 400."* — ou seja, na versão `4.15.3` (a mais recente publicada no PyPI hoje),
+`Profile.from_username` usa **sempre** `api/v1/users/web_profile_info/`, autenticado ou não;
+não existe nesta versão uma rota GraphQL alternativa acionada por sessão logada (a hipótese
+registrada anteriormente neste documento — "sessão autenticada usa GraphQL, mais estável" —
+não se confirmou nesta versão da lib e foi corrigida aqui).
+
+- `@silviabraz`: falhou com **exatamente** o erro original relatado pelo usuário: `400 Bad
+  Request - "fail" status, message "Asset asset://laser.provider/
+  ig_business_category_subvertical has been deleted. You cannot use this schema"`. Isso é
+  um **bug atual no backend do próprio Instagram** dentro do endpoint `web_profile_info`
+  (um campo de schema interno do Instagram foi removido do lado deles, quebrando a resposta
+  para certas contas — aparentemente as que têm uma subcategoria de negócio configurada).
+  Ocorreu de forma idêntica com sessão autenticada carregada corretamente, confirmando que
+  não é um problema de autenticação/identidade — é externo ao nosso código e à correção
+  desta sessão.
+- `@caroline_tanaka`: **passou** pela etapa de perfil (sem 400 — nem toda conta business é
+  afetada pelo bug de schema acima), mas falhou depois, ao buscar comentários de um post
+  específico via `i.instagram.com/api/v1/media/<id>/comments/`, com uma resposta genérica
+  `"fail" — "We're sorry, but something went wrong. Please try again."`. Padrão típico de
+  limitação/anti-automação no endpoint de comentários do app iPhone; não reproduzido o
+  suficiente nesta sessão (uma única tentativa) para afirmar se é permanente ou transitório.
+
+**Conclusão**: os dois bugs de sessão/identidade que motivaram esta issue estão corrigidos e
+confirmados em ambiente real. O "Erro HTTP 400" mencionado no pedido original tem uma causa
+mais específica do que "falta de autenticação" — é um bug atual do backend do Instagram no
+endpoint `web_profile_info`, fora do controle deste código e sem contorno disponível na API
+pública do Instaloader `4.15.3` (`Profile.from_username` não oferece endpoint alternativo).
+Não convém tentar novos contornos (ex. reimplementar a resolução de perfil via GraphQL bruto,
+contornando a lib) sem alinhamento explícito do usuário, dado o risco de manutenção
+(Instagram já quebrou a rota GraphQL anterior, motivando a lib a migrar para
+`web_profile_info` em primeiro lugar) e de tráfego adicional contra a conta real do usuário.
+- **Pendência real, atualizada**: acompanhar se o bug de schema do Instagram
+  (`ig_business_category_subvertical`) se resolve nas próximas versões/dias, e decidir se
+  vale a pena investir em um contorno próprio para o endpoint de comentários (possível
+  rate-limit) e/ou para perfis afetados pelo bug de schema.
