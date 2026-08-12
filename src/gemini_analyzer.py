@@ -3,8 +3,9 @@ import os
 
 from dotenv import load_dotenv
 
-import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted
+from google import genai
+from google.genai import types
+from google.genai.errors import APIError
 
 load_dotenv()
 
@@ -56,10 +57,10 @@ def build_batch_prompt(batch):
 
 
 class RealGeminiClient:
-    """Client real do Gemini via SDK oficial google.generativeai, com o mesmo
+    """Client real do Gemini via SDK oficial google.genai, com o mesmo
     contrato duck-typed (generate_content -> objeto com .text) usado por analyze_batch."""
 
-    def __init__(self, model_name="gemini-1.5-flash", api_key=None):
+    def __init__(self, model_name="gemini-flash-latest", api_key=None):
         api_key = api_key or os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise RuntimeError(
@@ -67,17 +68,20 @@ class RealGeminiClient:
                 "chave válida do Google AI Studio antes de usar RealGeminiClient."
             )
 
-        genai.configure(api_key=api_key)
-        self._model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config=genai.types.GenerationConfig(response_mime_type="application/json"),
-        )
+        self._client = genai.Client(api_key=api_key)
+        self.model_name = model_name
 
     def generate_content(self, prompt):
         try:
-            return self._model.generate_content(prompt)
-        except ResourceExhausted as exc:
-            raise GeminiRateLimitError(str(exc)) from exc
+            return self._client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
+            )
+        except APIError as exc:
+            if exc.code == 429:
+                raise GeminiRateLimitError(str(exc)) from exc
+            raise
 
 
 def analyze_batch(client, batch):

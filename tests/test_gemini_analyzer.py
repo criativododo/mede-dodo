@@ -159,19 +159,19 @@ def test_real_gemini_client_without_api_key_raises_clear_error(monkeypatch):
 
 
 def test_real_gemini_client_converts_sdk_rate_limit_error(monkeypatch):
-    from google.api_core.exceptions import ResourceExhausted
+    from google.genai.errors import APIError
 
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
 
-    class FakeSdkModel:
+    class FakeModels:
+        def generate_content(self, *, model, contents, config):
+            raise APIError(code=429, response_json={"message": "cota gratuita excedida"})
+
+    class FakeSdkClient:
         def __init__(self, *args, **kwargs):
-            pass
+            self.models = FakeModels()
 
-        def generate_content(self, prompt):
-            raise ResourceExhausted("cota gratuita excedida")
-
-    monkeypatch.setattr(gemini_analyzer.genai, "configure", lambda **kwargs: None)
-    monkeypatch.setattr(gemini_analyzer.genai, "GenerativeModel", FakeSdkModel)
+    monkeypatch.setattr(gemini_analyzer.genai, "Client", FakeSdkClient)
 
     client = gemini_analyzer.RealGeminiClient()
 
@@ -187,17 +187,18 @@ def test_real_gemini_client_requests_structured_json_response(monkeypatch):
 
     captured = {}
 
-    class FakeSdkModel:
-        def __init__(self, *args, **kwargs):
-            captured["kwargs"] = kwargs
-
-        def generate_content(self, prompt):
+    class FakeModels:
+        def generate_content(self, *, model, contents, config):
+            captured["kwargs"] = {"model": model, "contents": contents, "config": config}
             return FakeResponse("[]")
 
-    monkeypatch.setattr(gemini_analyzer.genai, "configure", lambda **kwargs: None)
-    monkeypatch.setattr(gemini_analyzer.genai, "GenerativeModel", FakeSdkModel)
+    class FakeSdkClient:
+        def __init__(self, *args, **kwargs):
+            self.models = FakeModels()
 
-    gemini_analyzer.RealGeminiClient()
+    monkeypatch.setattr(gemini_analyzer.genai, "Client", FakeSdkClient)
 
-    generation_config = captured["kwargs"]["generation_config"]
-    assert generation_config.response_mime_type == "application/json"
+    gemini_analyzer.RealGeminiClient().generate_content("prompt qualquer")
+
+    config = captured["kwargs"]["config"]
+    assert config.response_mime_type == "application/json"

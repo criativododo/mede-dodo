@@ -1,6 +1,6 @@
 streamlit==1.61.1
 fpdf2==2.8.8
 pytest==9.1.1
-google-generativeai==0.8.6
+google-genai==2.17.0
 python-dotenv==1.2.2
 instaloader==4.15.3
