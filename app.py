@@ -305,9 +305,22 @@ def _render_antifraude_card(analysis):
         st.caption("Nenhum repetidor relevante identificado.")
 
 
-def _render_publis_card():
+def _render_publis_card(analysis):
     st.subheader("Publis")
-    st.info(exporter.PUBLIS_PLACEHOLDER_MSG)
+    publis = analysis.get("publis", [])
+    if not publis:
+        st.caption(exporter.PUBLIS_VAZIO_MSG)
+        return
+    st.table(
+        [
+            {
+                "post": item.get("link") or item.get("post_id"),
+                "indícios": ", ".join(item.get("termos", [])),
+                "marca(s)": ", ".join(item.get("marcas", [])) or "—",
+            }
+            for item in publis
+        ]
+    )
 
 
 def _render_comentarios_card(analysis, gemini_configurado):
@@ -414,7 +427,7 @@ def main():
         col_left, col_right = st.columns(2)
         with col_left:
             _render_demografia_card(analysis)
-            _render_publis_card()
+            _render_publis_card(analysis)
         with col_right:
             _render_antifraude_card(analysis)
             _render_comentarios_card(analysis, state.get("gemini_configurado", False))

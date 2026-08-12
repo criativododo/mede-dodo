@@ -59,16 +59,33 @@ def test_generate_html_report_contains_key_metrics():
     assert "58" in html  # qualificados
 
 
-def test_generate_html_report_marks_publis_as_placeholder_when_empty():
+def test_generate_html_report_shows_genuine_empty_state_when_no_publis_detected():
     html = exporter.generate_html_report(make_analysis(publis=[]))
 
     lowered = html.lower()
     assert "publi" in lowered
-    # deve indicar explicitamente que não há dados de publis nesta rodada
-    assert any(
-        termo in lowered
-        for termo in ("não implementado", "nao implementado", "placeholder", "em breve", "não disponível", "nao disponivel")
+    # RF-09 é real agora: não pode mais dizer que a funcionalidade não foi implementada
+    assert "não implementado" not in lowered and "nao implementado" not in lowered
+    assert "nenhuma publi" in lowered or "não identificada" in lowered or "nao identificada" in lowered
+
+
+def test_generate_html_report_lists_real_publis_with_links():
+    analysis = make_analysis(
+        publis=[
+            {
+                "post_id": "111",
+                "shortcode": "AbC123",
+                "link": "https://www.instagram.com/p/AbC123/",
+                "termos": ["#publi", "mencao_marca"],
+                "marcas": ["marca_x"],
+            }
+        ]
     )
+
+    html = exporter.generate_html_report(analysis)
+
+    assert "https://www.instagram.com/p/AbC123/" in html
+    assert "marca_x" in html
 
 
 def test_generate_html_report_shows_placeholder_when_no_regioes_detected():
@@ -108,14 +125,14 @@ def test_generate_pdf_report_handles_empty_optional_collections():
 
 
 def test_generate_pdf_report_handles_multiple_publis_items():
-    """Mesma classe de regressão do teste de gemini_items, para o loop de publis
-    (RF-09 ainda é placeholder em app.py, mas o exporter é genérico e aceita
-    qualquer lista aqui)."""
+    """Mesma classe de regressão do teste de gemini_items, para o loop de
+    publis — agora com o formato real produzido por detect_sponsored_posts
+    (RF-09)."""
     analysis = make_analysis()
     analysis["publis"] = [
-        "Post patrocinado — Marca A — 12/07",
-        "Post patrocinado — Marca B — 20/07",
-        "Post patrocinado — Marca C — 02/08",
+        {"post_id": "1", "shortcode": "a1", "link": "https://www.instagram.com/p/a1/", "termos": ["#publi"], "marcas": ["marca_a"]},
+        {"post_id": "2", "shortcode": "a2", "link": "https://www.instagram.com/p/a2/", "termos": ["parceria"], "marcas": ["marca_b"]},
+        {"post_id": "3", "shortcode": "a3", "link": "https://www.instagram.com/p/a3/", "termos": ["patrocinado"], "marcas": ["marca_c"]},
     ]
 
     pdf_bytes = exporter.generate_pdf_report(analysis)

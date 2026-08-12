@@ -9,9 +9,8 @@ import html as html_lib
 
 from fpdf import FPDF
 
-PUBLIS_PLACEHOLDER_MSG = (
-    "Varredura de publis (RF-09) não implementada nesta rodada — placeholder "
-    "reservado para issue futura."
+PUBLIS_VAZIO_MSG = (
+    "Nenhuma publi ou parceria comercial identificada nas legendas coletadas nesta janela."
 )
 GEMINI_NAO_CONFIGURADO_MSG = "Análise de intenção via Gemini não configurada nesta sessão."
 
@@ -87,9 +86,24 @@ def generate_html_report(analysis: dict) -> str:
 
     publis = analysis.get("publis", []) or []
     if publis:
-        publis_html = "".join(f"<li>{html_lib.escape(str(item))}</li>" for item in publis)
+        publis_html = "".join(
+            "<li>"
+            + (
+                f"<a href=\"{html_lib.escape(str(item.get('link')))}\">{html_lib.escape(str(item.get('link')))}</a>"
+                if item.get("link")
+                else html_lib.escape(str(item.get("post_id", "")))
+            )
+            + f" — indícios: {html_lib.escape(', '.join(item.get('termos', [])))}"
+            + (
+                f" — marca(s): {html_lib.escape(', '.join(item.get('marcas', [])))}"
+                if item.get("marcas")
+                else ""
+            )
+            + "</li>"
+            for item in publis
+        )
     else:
-        publis_html = f"<p class='placeholder'>{html_lib.escape(PUBLIS_PLACEHOLDER_MSG)}</p>"
+        publis_html = f"<p class='placeholder'>{html_lib.escape(PUBLIS_VAZIO_MSG)}</p>"
 
     comentarios = analysis.get("comentarios_analisados", {}) or {}
     total_comentarios = comentarios.get("total", 0)
@@ -231,9 +245,12 @@ def generate_pdf_report(analysis: dict) -> bytes:
     pdf.set_font("helvetica", "I", 11)
     if publis:
         for item in publis:
-            pdf.multi_cell(0, 7, _pdf_safe(f"- {item}"), new_x="LMARGIN", new_y="NEXT")
+            texto = f"- {item.get('link') or item.get('post_id', '')} | indicios: {', '.join(item.get('termos', []))}"
+            if item.get("marcas"):
+                texto += f" | marca(s): {', '.join(item.get('marcas', []))}"
+            pdf.multi_cell(0, 7, _pdf_safe(texto), new_x="LMARGIN", new_y="NEXT")
     else:
-        pdf.multi_cell(0, 7, _pdf_safe(PUBLIS_PLACEHOLDER_MSG))
+        pdf.multi_cell(0, 7, _pdf_safe(PUBLIS_VAZIO_MSG))
     pdf.ln(2)
 
     pdf.set_font("helvetica", "B", 12)
