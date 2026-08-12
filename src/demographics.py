@@ -1,5 +1,6 @@
 import re
 import unicodedata
+from collections import Counter
 
 GENDER_THRESHOLD = 0.85
 
@@ -71,6 +72,29 @@ def extract_first_name_from_handle(handle):
     return match.group(0) if match else ""
 
 
+def extract_name_candidates_from_handle(handle):
+    """Todos os segmentos alfabéticos de um @handle, na ordem em que aparecem
+    (ex.: 'style_by_ana92' -> ['style', 'by', 'ana']). Handles reais de
+    moda/lifestyle costumam prefixar ou sufixar o nome com termos genéricos
+    ('style', 'by', 'oficial', 'eu'...) — usar só o primeiro segmento (como
+    extract_first_name_from_handle) perde o nome real nesses casos."""
+    if not handle:
+        return []
+    return HANDLE_NAME_SEGMENT_PATTERN.findall(handle)
+
+
+def infer_gender_from_handle(handle, names_db=DEFAULT_NAMES_DB):
+    """Tenta cada segmento alfabético do @handle contra a base de nomes, na
+    ordem em que aparecem, até achar um que resolva para 'feminino' ou
+    'masculino'. Só cai em 'indeterminado' se nenhum segmento corresponder a
+    um nome conhecido com viés de gênero claro (RF: demografia de gênero)."""
+    for candidate in extract_name_candidates_from_handle(handle):
+        gender = infer_gender(candidate, names_db=names_db)
+        if gender != "indeterminado":
+            return gender
+    return "indeterminado"
+
+
 def _normalize_name(name):
     decomposed = unicodedata.normalize("NFKD", name)
     without_accents = "".join(c for c in decomposed if not unicodedata.combining(c))
@@ -125,3 +149,21 @@ def infer_region(text, ddd_to_uf=DEFAULT_DDD_TO_UF, region_keywords=DEFAULT_REGI
             por_mencao.append(uf)
 
     return {"por_ddd": por_ddd, "por_mencao": por_mencao}
+
+
+def summarize_region_distribution(detected_ufs):
+    """Recebe uma lista de UFs (uma entrada por detecção — ex.: um por
+    comentário com região identificada, já deduplicada dentro do próprio
+    comentário) e devolve a distribuição proporcional entre os estados
+    detectados, da mais para a menos frequente. Lista vazia -> []."""
+    if not detected_ufs:
+        return []
+    total = len(detected_ufs)
+    counts = Counter(detected_ufs)
+    return [{"uf": uf, "pct": count / total} for uf, count in counts.most_common()]
+
+
+def format_region_distribution(distribution):
+    """Formata a distribuição de summarize_region_distribution como uma lista
+    de strings 'UF (XX%)', ex.: ['SP (40%)', 'RJ (25%)', 'MG (15%)']."""
+    return [f"{item['uf']} ({item['pct'] * 100:.0f}%)" for item in distribution]

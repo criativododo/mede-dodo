@@ -138,3 +138,81 @@ def test_extract_first_name_from_handle_feeds_infer_gender_correctly():
     nome = demographics.extract_first_name_from_handle("ana_silva92")
 
     assert demographics.infer_gender(nome, names_db=names_db) == "feminino"
+
+
+def test_extract_name_candidates_from_handle_returns_all_alpha_segments_in_order():
+    assert demographics.extract_name_candidates_from_handle("style_by_ana92") == ["style", "by", "ana"]
+
+
+def test_extract_name_candidates_from_handle_returns_empty_list_for_falsy_input():
+    assert demographics.extract_name_candidates_from_handle(None) == []
+    assert demographics.extract_name_candidates_from_handle("") == []
+
+
+def test_infer_gender_from_handle_uses_first_segment_when_it_is_a_known_name():
+    assert demographics.infer_gender_from_handle("maria_silva92", names_db=CUSTOM_NAMES_DB) == "feminino"
+
+
+def test_infer_gender_from_handle_falls_back_to_later_segment_when_first_is_not_a_name():
+    """Handles reais de moda/lifestyle costumam prefixar o nome com termos
+    genéricos ('style', 'eu', 'oficial'...) — pegar só o primeiro segmento
+    (comportamento antigo) classificaria erroneamente como indeterminado."""
+    assert demographics.infer_gender_from_handle("style_by_maria", names_db=CUSTOM_NAMES_DB) == "feminino"
+    assert demographics.infer_gender_from_handle("its_joao_oficial", names_db=CUSTOM_NAMES_DB) == "masculino"
+
+
+def test_infer_gender_from_handle_returns_indeterminado_when_no_segment_matches():
+    assert demographics.infer_gender_from_handle("xyz_qwerty123", names_db=CUSTOM_NAMES_DB) == "indeterminado"
+
+
+def test_infer_gender_from_handle_returns_indeterminado_for_falsy_input():
+    assert demographics.infer_gender_from_handle(None, names_db=CUSTOM_NAMES_DB) == "indeterminado"
+
+
+FEMALE_FASHION_HANDLES = [
+    "style_by_maria",
+    "its_ana_oficial",
+    "camila.moda92",
+    "eu_juliana_looks",
+    "fernanda_style_",
+    "look.by.patricia",
+]
+
+
+def test_infer_gender_from_handle_classifies_prefixed_fashion_handles_as_feminino_using_real_ibge_base():
+    """Prova de integração RF: perfis femininos de moda/lifestyle devem
+    classificar a amostragem como predominantemente feminina (>80%) mesmo
+    quando os @handles reais trazem prefixos genéricos antes do nome."""
+    names_db = data_loaders.load_names_db()
+
+    resultados = [demographics.infer_gender_from_handle(h, names_db=names_db) for h in FEMALE_FASHION_HANDLES]
+
+    feminino_ratio = resultados.count("feminino") / len(resultados)
+    assert feminino_ratio > 0.8, resultados
+
+
+def test_summarize_region_distribution_returns_proportional_breakdown_sorted_descending():
+    detected_ufs = ["SP", "SP", "SP", "SP", "RJ", "RJ", "RJ", "MG", "MG", "BA"]
+
+    distribution = demographics.summarize_region_distribution(detected_ufs)
+
+    assert distribution == [
+        {"uf": "SP", "pct": 0.4},
+        {"uf": "RJ", "pct": 0.3},
+        {"uf": "MG", "pct": 0.2},
+        {"uf": "BA", "pct": 0.1},
+    ]
+
+
+def test_summarize_region_distribution_returns_empty_list_for_no_detections():
+    assert demographics.summarize_region_distribution([]) == []
+
+
+def test_format_region_distribution_renders_uf_with_rounded_percentage():
+    distribution = [{"uf": "SP", "pct": 0.4}, {"uf": "RJ", "pct": 0.25}, {"uf": "MG", "pct": 0.15}]
+
+    assert demographics.format_region_distribution(distribution) == ["SP (40%)", "RJ (25%)", "MG (15%)"]
+
+
+def test_format_region_distribution_returns_empty_list_for_empty_distribution():
+    assert demographics.format_region_distribution([]) == []

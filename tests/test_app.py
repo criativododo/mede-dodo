@@ -54,6 +54,55 @@ def test_app_idle_state_shows_no_analysis_yet():
     assert download_button_labels == []
 
 
+def test_app_has_limpar_cache_button():
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    button_labels = [b.label for b in at.button]
+    assert any("Limpar Cache e Re-analisar Perfil" in label for label in button_labels)
+
+
+def test_limpar_cache_button_clears_cached_profile_before_reanalyzing(monkeypatch):
+    """O botão 'Limpar Cache e Re-analisar Perfil' deve apagar o cache do
+    perfil antes de disparar o pipeline, garantindo que registros antigos ou
+    corrompidos (ex.: fa_fiel_0) não sobrevivam à re-análise. A raspagem (mesmo
+    em modo demo) reescreve o cache em thread de background logo em seguida,
+    então o que a UI garante é a ORDEM (limpar antes de iniciar), verificada
+    aqui via monkeypatch em vez de inspecionar o cache.db pós-clique (que teria
+    corrida com a thread de background). Usa `src.database` diretamente (não
+    `import app`): importar `app` executa `main()` em modo bare (fora de um
+    ScriptRunContext real), o que deixa lixo de estado de formulário do
+    Streamlit entre testes e quebra AppTest.from_file() chamado depois."""
+    from src import database
+
+    calls = []
+    monkeypatch.setattr(database, "clear_profile_cache", lambda username: calls.append(username))
+
+    username = f"perfil_limpar_cache_{uuid.uuid4().hex}"
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.text_input(key="username_input").set_value(username)
+    at.toggle(key="demo_mode_toggle").set_value(True)
+    limpar_button = next(b for b in at.button if b.label == "Limpar Cache e Re-analisar Perfil")
+    limpar_button.click().run()
+
+    assert not at.exception
+    assert calls == [username]
+
+    max_reruns = 50
+    for _ in range(max_reruns):
+        assert not at.exception
+        status = at.session_state["pipeline_state"].get("status")
+        if status != "rodando":
+            break
+        at.run()
+
+    assert at.session_state["pipeline_state"]["status"] == "concluido"
+
+
 def test_app_demo_pipeline_runs_end_to_end_without_gemini_api_key(monkeypatch):
     """Sem GEMINI_API_KEY no ambiente, o Modo Demonstração continua funcionando
     fim-a-fim: RealGeminiClient() levanta RuntimeError, app.py deve capturar isso
@@ -114,6 +163,55 @@ def test_run_pipeline_exposes_genero_pct_in_demo_mode():
     genero_pct = state["analysis"]["demografia"]["genero_pct"]
     assert set(genero_pct.keys()) == {"feminino", "masculino", "indeterminado"}
     assert abs(sum(genero_pct.values()) - 1.0) < 1e-9
+
+
+def test_run_pipeline_returns_proportional_region_breakdown_and_handles_prefixed_gender_in_real_mode(monkeypatch):
+    """RF: perfis femininos de moda/lifestyle devem classificar a amostragem
+    como predominantemente feminina (>80%) mesmo com @handles prefixados
+    ('style_by_...'), e a lista de regiões deve vir proporcional
+    ('SP (40%), RJ (25%)...') em vez de um único estado ou lista sem peso."""
+    import app
+
+    def comentario(username, texto):
+        return {"username": username, "texto": texto, "respondido": False}
+
+    fake_cached = {
+        "profile": {"followers_count": 20000},
+        "posts": [
+            {
+                "post_id": "1",
+                "likes_count": 100,
+                "comments_count": 10,
+                "raw": {
+                    "shortcode": "sc1",
+                    "caption": "look de hoje",
+                    "comments": [
+                        comentario("style_by_maria", "chama no (11) 91234-5678"),
+                        comentario("its_ana_oficial", "chama no (11) 98765-4321"),
+                        comentario("camila.moda92", "moro no Rio de Janeiro"),
+                        comentario("eu_juliana_looks", "sou de Minas Gerais"),
+                        comentario("look.by.patricia", "Lindo"),
+                    ],
+                },
+            },
+        ],
+    }
+
+    monkeypatch.setattr(app.scraper, "scrape_profile", lambda *args, **kwargs: fake_cached)
+
+    state = {}
+    app._run_pipeline("perfil_moda_teste", 90, False, None, state)
+
+    assert state["status"] == "concluido"
+    analysis = state["analysis"]
+    demografia = analysis["demografia"]
+
+    # >80% feminino mesmo com handles prefixados (style_by_, its_..._oficial, eu_..._looks, look.by.)
+    assert demografia["genero_predominante"] == "feminino"
+    assert demografia["genero_pct"]["feminino"] > 0.8
+
+    # lista proporcional (não um único estado): 2 detecções de SP, 1 de RJ, 1 de MG
+    assert demografia["regioes"] == ["SP (50%)", "RJ (25%)", "MG (25%)"]
 
 
 def test_run_pipeline_filters_posts_outside_window_and_infers_gender_from_handle_in_real_mode(monkeypatch):

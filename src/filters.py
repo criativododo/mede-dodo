@@ -93,8 +93,14 @@ SPONSORED_PATTERNS = {
     "#ad": re.compile(r"#ad\b", re.IGNORECASE),
     "parceria": re.compile(r"\bparceria\b", re.IGNORECASE),
     "patrocinado": re.compile(r"\bpatrocinad[oa]\b", re.IGNORECASE),
+    "cupom": re.compile(r"\bcupom\b", re.IGNORECASE),
+    "desconto": re.compile(r"\bdesconto\b", re.IGNORECASE),
+    "provador": re.compile(r"\bprovador\b", re.IGNORECASE),
+    "use_o_codigo": re.compile(r"\buse\s+o\s+c[oó]digo\b", re.IGNORECASE),
+    "colecao": re.compile(r"\bcole[çc][ãa]o\b", re.IGNORECASE),
 }
 BRAND_MENTION_PATTERN = re.compile(r"@([A-Za-z0-9_.]+)")
+EXTERNAL_LINK_PATTERN = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 
 
 def detect_sponsored_posts(posts):
@@ -112,6 +118,8 @@ def detect_sponsored_posts(posts):
         marcas = BRAND_MENTION_PATTERN.findall(caption)
         if marcas:
             termos.append("mencao_marca")
+        if EXTERNAL_LINK_PATTERN.search(caption):
+            termos.append("link_externo")
 
         if not termos:
             continue

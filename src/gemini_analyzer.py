@@ -1,8 +1,12 @@
 import json
 import os
 
+from dotenv import load_dotenv
+
 import google.generativeai as genai
 from google.api_core.exceptions import ResourceExhausted
+
+load_dotenv()
 
 DEFAULT_MAX_BATCH_SIZE = 100
 DEFAULT_MAX_BATCHES = 2
