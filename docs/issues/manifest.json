@@ -1,0 +1,46 @@
+{
+  "issues": [
+    {
+      "id": "ISSUE-0001",
+      "title": "Módulo de Coleta Local e Cache SQLite",
+      "status": "parcial",
+      "file": "docs/issues/ISSUE-0001.md",
+      "notas": "Cache SQLite, throttling e orquestração implementados e testados (6/6 testes). fetch_fn real de raspagem do Instagram pendente de issue de integração subsequente."
+    },
+    {
+      "id": "ISSUE-0002",
+      "title": "Filtragem Heurística e Demografia Local",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0002.md",
+      "notas": "src/filters.py e src/demographics.py implementados e testados (12/12 testes). Bases melhores (nomes/DDD) entregues na ISSUE-0006."
+    },
+    {
+      "id": "ISSUE-0003",
+      "title": "Processamento Gemini em Lote",
+      "status": "parcial",
+      "file": "docs/issues/ISSUE-0003.md",
+      "notas": "src/gemini_analyzer.py implementado e testado com cliente mockado (10/10 testes). Integração real com SDK do Gemini pendente. Índice de repetição/pods deliberadamente fora do schema (ver ISSUE-0003.md) — cálculo local entregue na ISSUE-0005."
+    },
+    {
+      "id": "ISSUE-0004",
+      "title": "Dashboard Streamlit e Exportador",
+      "status": "parcial",
+      "file": "docs/issues/ISSUE-0004.md",
+      "notas": "app.py (pipeline em thread de background, Modo Demonstração, cards, export HTML/PDF) e src/exporter.py implementados e testados (11/11 testes; 61/61 na suíte completa). Boot real validado via AppTest. Depende de ISSUE-0001/0003 para sair do Modo Demonstração; RF-09 (publis) é placeholder."
+    },
+    {
+      "id": "ISSUE-0005",
+      "title": "Métricas de Antifraude (Pods) e Score DODÔ",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0005.md",
+      "notas": "src/metrics.py (calc_pod_index) e src/scoring.py (calc_engagement_rate, calc_dodo_score) implementados e testados (15/15 testes). Pesos do score são heurística de engenharia, não calibrada com dados reais de campanha."
+    },
+    {
+      "id": "ISSUE-0006",
+      "title": "Bases Locais de Demografia (Nomes e DDD)",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0006.md",
+      "notas": "src/data_loaders.py implementado e testado (7/7 testes). 1.984 nomes (base curada, fonte comunitária citando API do IBGE) e 67 DDD→UF (fonte web, não validada contra ANATEL oficial — site indisponível na sessão)."
+    }
+  ]
+}

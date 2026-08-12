@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "memoryRepositoryUrl": "https://github.com/criativododo/criativododo-memory.git",
+  "memoryDirectory": "criativododo-memory",
+  "journalWindow": 3,
+  "archiveThreshold": 5,
+  "checks": {
+    "app": [".venv/bin/python -m pytest tests/"]
+  }
+}
