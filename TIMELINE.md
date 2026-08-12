@@ -165,3 +165,22 @@
 - Branch `worktree-instagram-scraper-fix` mergeada em `main` (fast-forward) por decisão
   explícita do usuário, mesmo com a pendência externa documentada (bug de backend do
   Instagram).
+
+## 2026-08-12 (contorno para os bugs de backend do Instagram, validado ao vivo)
+- Por decisão explícita do usuário, investidos contornos próprios (em vez de só aguardar
+  correção do lado do Instagram) para as duas pendências externas restantes de ISSUE-0001:
+  corrigido o tipo real da exceção do bug de schema (`QueryReturnedBadRequestException`, não
+  capturada antes por não ser subclasse de `ConnectionException`);
+  `_resolve_profile_via_topsearch` resolve o perfil via `TopSearchResults` quando
+  `web_profile_info` falha com o bug de schema e a sessão está autenticada;
+  `_fetch_comments_first_page_via_graphql` busca a 1ª página de comentários via GraphQL
+  direto quando o endpoint do app iPhone falha sem coletar nada. Corrigido também um bug
+  adicional: posts fixados (pinned) antigos escondiam posts recentes reais no corte por
+  janela de data.
+- Suíte de testes: 135 → 145 (10 testes novos cobrindo os dois fallbacks e o bug de posts
+  fixados).
+- Validado ao vivo (autorizado explicitamente pelo usuário) contra `@silviabraz` e
+  `@caroline_tanaka` reais: `@silviabraz`, que antes falhava 100% com o bug de schema, agora
+  resolve com sucesso (60 posts coletados); `@caroline_tanaka` confirmou que o endpoint de
+  comentários do app iPhone falha em 100% dos posts amostrados (não é rate-limit pontual),
+  mas o fallback via GraphQL recuperou comentários reais em todos eles. ISSUE-0001 concluída.

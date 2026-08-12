@@ -3,7 +3,7 @@
 ## Status Atual
 - [x] Infraestrutura física de pastas e arquivos criada.
 - [x] SPEC-001 e DUMMY.md definidos.
-- [~] **ISSUE-0001** — Coleta Local e Cache SQLite. `src/database.py`/`src/scraper.py`
+- [x] **ISSUE-0001** — Coleta Local e Cache SQLite. `src/database.py`/`src/scraper.py`
   (cache, throttling, orquestração) prontos e testados. `instaloader_fetch_fn` (via
   instaloader, sessão local por arquivo de cookies em `INSTAGRAM_SESSION_FILE`) implementado
   e **integrado ao pipeline de `app.py`** (usado como `fetch_fn` sempre que o Modo
@@ -44,6 +44,22 @@
   do Instagram vira um `ScraperUnavailableError` com mensagem clara (não sugere problema de
   sessão), e uma falha na busca de comentários de um post não aborta a coleta dos demais
   posts do perfil. Ver "Tratamento de erro resiliente" em `docs/issues/ISSUE-0001.md`.
+  **Contorno implementado e validado ao vivo em seguida (2026-08-12)**: (1) corrigido o tipo
+  real da exceção do bug de schema (`QueryReturnedBadRequestException`, que não é subclasse
+  de `ConnectionException` — o `except` anterior nunca capturava o erro de verdade); (2)
+  `_resolve_profile_via_topsearch` contorna o bug de schema resolvendo o perfil via
+  `TopSearchResults` (endpoint diferente) quando logado; (3)
+  `_fetch_comments_first_page_via_graphql` contorna a instabilidade do endpoint de
+  comentários do app iPhone buscando a 1ª página via GraphQL direto; (4) corrigido bug
+  adicional de posts fixados (pinned) antigos escondendo posts recentes reais no corte por
+  janela de data. **Validado ao vivo contra o Instagram real** (por pedido explícito do
+  usuário): `@silviabraz`, que antes falhava 100% com o bug de schema, agora resolve com
+  sucesso via o fallback de topsearch (60 posts coletados); `@caroline_tanaka` confirmou que
+  o endpoint de comentários do app iPhone falha de forma sistemática (100% dos posts
+  amostrados, não pontual/rate-limit), mas o fallback via GraphQL recuperou comentários reais
+  em todos os posts amostrados. ISSUE-0001 considerada **concluída** — ver "Contorno para o
+  bug de schema e para comentários" e "Validação ao vivo do contorno" em
+  `docs/issues/ISSUE-0001.md`.
 - [x] **ISSUE-0002** — Filtragem Heurística e Demografia Local. `src/filters.py`
   (comentários rasos vs. alta intenção comercial) e `src/demographics.py` (gênero/região,
   interfaces injetáveis) prontos e testados. Bug do falso positivo "para" (preposição) → PA
@@ -103,6 +119,9 @@ sidebar em `tests/test_app.py`)
 → 135 (2026-08-12, tratamento de erro resiliente em `Profile.from_username()` e na busca de
 comentários: +4 testes em `tests/test_scraper.py` reproduzindo o erro 400 de schema
 removido e a interrupção parcial da busca de comentários).
+→ 145 (2026-08-12, contorno para o bug de schema via `TopSearchResults` e para a
+instabilidade de comentários via GraphQL direto: +10 testes em `tests/test_scraper.py`,
+validado em seguida ao vivo contra `@silviabraz` e `@caroline_tanaka` reais).
 
 ## MVP: o que funciona hoje
 Pipeline completo de ponta a ponta (`app.py`) em **Modo Demonstração** (dados fictícios
@@ -113,19 +132,15 @@ Fora do Modo Demonstração, o pipeline já usa os conectores reais
 `GEMINI_API_KEY` está definida). Desde a ISSUE-0008, `instaloader_fetch_fn` busca
 comentários reais (não só metadados agregados de post) e filtra posts pela data real de
 publicação dentro da janela selecionada (30/60/90 dias) — a integração de código está
-completa e validada com uma simulação fiel da API do Instaloader (teste E2E fim-a-fim),
-mas ainda não foi exercitada contra o Instagram/Gemini reais neste ambiente.
+completa e **validada ao vivo contra o Instagram real** (`@silviabraz` e `@caroline_tanaka`,
+2026-08-12, ver ISSUE-0001.md), incluindo contornos funcionais para os dois bugs de backend
+do Instagram encontrados no caminho. `RealGeminiClient` ainda não foi exercitado contra o
+Gemini real neste ambiente.
 
 ## O que falta para sair de "demonstração" para uso real
-1. Validar `instaloader_fetch_fn` (`src/scraper.py`) e a integração em `app.py` contra o
-   Instagram real (sessão de cookies de verdade via `INSTAGRAM_SESSION_FILE`) — a
-   interface, a integração no pipeline, a busca de comentários reais, o filtro de janela por
-   data de publicação e o fallback de cache já estão implementados e testados com uma
-   simulação fiel da API (Instaloader mockado); falta a validação com rede/conta reais —
-   ISSUE-0001/ISSUE-0008.
-2. Validar `RealGeminiClient` (`src/gemini_analyzer.py`) contra a API real do Gemini com
+1. Validar `RealGeminiClient` (`src/gemini_analyzer.py`) contra a API real do Gemini com
    uma `GEMINI_API_KEY` válida — a integração no pipeline de `app.py` já está completa e
    testada com mocks; falta a validação com chamada real — ISSUE-0003.
-3. Validação da tabela de DDDs contra a fonte oficial ANATEL (indisponível nesta sessão)
+2. Validação da tabela de DDDs contra a fonte oficial ANATEL (indisponível nesta sessão)
    e, se desejado, ampliação da base de nomes além do top-1000/gênero.
-4. Calibração dos pesos do Score DODÔ com dados reais de campanha (hoje é heurística).
+3. Calibração dos pesos do Score DODÔ com dados reais de campanha (hoje é heurística).

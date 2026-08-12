@@ -222,7 +222,7 @@ class FakeComment:
 class FakePost:
     def __init__(
         self, mediaid, shortcode, caption, likes, comments_count, date_utc,
-        comments=None, comments_error=None,
+        comments=None, comments_error=None, context=None,
     ):
         self.mediaid = mediaid
         self.shortcode = shortcode
@@ -232,6 +232,7 @@ class FakePost:
         self.date_utc = date_utc
         self._comments = comments or []
         self._comments_error = comments_error
+        self._context = context
 
     def get_comments(self):
         def _generator():
@@ -244,7 +245,7 @@ class FakePost:
 
 
 class FakeContext:
-    pass
+    is_logged_in = False
 
 
 class FakeInstaloader:
@@ -354,6 +355,46 @@ def test_instaloader_fetch_fn_excludes_posts_older_than_max_window_days(monkeypa
 
     post_ids = [p["post_id"] for p in result["posts"]]
     assert post_ids == ["1"]
+
+
+def test_instaloader_fetch_fn_skips_old_pinned_posts_and_reaches_real_recent_posts(monkeypatch):
+    # Regressão: reproduzido ao vivo em @silviabraz — o Instagram pode fixar até 3
+    # posts no topo do grid fora de ordem cronológica (mesmo posts bem antigos).
+    # get_posts() retorna esses fixados PRIMEIRO, e só depois volta para a ordem
+    # cronológica normal (mais recente -> mais antigo). O antigo `break` no primeiro
+    # post fora da janela desistia após o 1º post fixado antigo, escondendo todos os
+    # posts recentes reais que vinham logo em seguida.
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            now = datetime.now(timezone.utc)
+            pinned_antigo_1 = now - timedelta(days=300)
+            pinned_antigo_2 = now - timedelta(days=600)
+            pinned_antigo_3 = now - timedelta(days=1800)
+            recente_1 = now - timedelta(days=1)
+            recente_2 = now - timedelta(days=5)
+            fora_da_janela = now - timedelta(days=scraper.MAX_WINDOW_DAYS + 10)
+            return iter(
+                [
+                    FakePost(1, "fixado_1", "legenda", 1, 0, pinned_antigo_1),
+                    FakePost(2, "fixado_2", "legenda", 1, 0, pinned_antigo_2),
+                    FakePost(3, "fixado_3", "legenda", 1, 0, pinned_antigo_3),
+                    FakePost(4, "recente_1", "legenda", 10, 0, recente_1),
+                    FakePost(5, "recente_2", "legenda", 10, 0, recente_2),
+                    FakePost(6, "antigo_de_verdade", "legenda", 10, 0, fora_da_janela),
+                ]
+            )
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    post_ids = [p["post_id"] for p in result["posts"]]
+    assert post_ids == ["4", "5"]
 
 
 def test_instaloader_fetch_fn_stops_at_safety_cap_of_posts(monkeypatch):
@@ -538,6 +579,130 @@ def test_fetch_real_comments_returns_partial_data_when_comment_fetch_fails_partw
     assert "abc" in caplog.text or "perfil_fake" in caplog.text
 
 
+class FakeGraphQLContext:
+    """Simula InstaloaderContext.graphql_query para o fallback de comentários.
+    `response_or_error` é o payload GraphQL a devolver, ou uma exceção a
+    levantar (simulando o fallback também falhando)."""
+
+    def __init__(self, response_or_error):
+        self.response_or_error = response_or_error
+        self.calls = []
+
+    def graphql_query(self, query_hash, variables):
+        self.calls.append((query_hash, variables))
+        if isinstance(self.response_or_error, Exception):
+            raise self.response_or_error
+        return self.response_or_error
+
+
+def _comment_edge(username, text, replied_by=None):
+    threaded_edges = []
+    if replied_by:
+        threaded_edges.append({"node": {"owner": {"username": replied_by}}})
+    return {
+        "node": {
+            "text": text,
+            "owner": {"username": username},
+            "edge_threaded_comments": {"edges": threaded_edges},
+        }
+    }
+
+
+def test_fetch_real_comments_falls_back_to_graphql_first_page_when_get_comments_fails_immediately(caplog):
+    # Regressão: reproduzido ao vivo em vários posts de @silviabraz — para posts
+    # com mais comentários que instaloader.NodeIterator.page_length() (12),
+    # post.get_comments() sempre roteia para o endpoint do app iPhone (fallback da
+    # própria lib para a issue #2125 dela), que está falhando de forma sistemática
+    # (100% dos posts testados) com um erro genérico do Instagram — não é uma
+    # falha pontual/rate-limit. Em vez de ficar com zero comentários, buscamos ao
+    # menos a 1ª página real via GraphQL direto (o mesmo endpoint que a lib já usa
+    # nativamente para posts com poucos comentários).
+    graphql_response = {
+        "data": {
+            "shortcode_media": {
+                "edge_media_to_parent_comment": {
+                    "edges": [
+                        _comment_edge("ana_silva92", "Quanto custa?"),
+                        _comment_edge("joao99", "Lindo"),
+                    ]
+                }
+            }
+        }
+    }
+    post = FakePost(
+        1, "abc", "legenda", 10, 483, datetime.now(timezone.utc),
+        comments_error=instaloader.exceptions.ConnectionException("something went wrong"),
+        context=FakeGraphQLContext(graphql_response),
+    )
+
+    with caplog.at_level("WARNING"):
+        comments = scraper._fetch_real_comments(post, "perfil_fake")
+
+    assert comments == [
+        {"username": "ana_silva92", "texto": "Quanto custa?", "respondido": False},
+        {"username": "joao99", "texto": "Lindo", "respondido": False},
+    ]
+
+
+def test_fetch_real_comments_marks_respondido_true_via_graphql_fallback_threaded_replies(caplog):
+    graphql_response = {
+        "data": {
+            "shortcode_media": {
+                "edge_media_to_parent_comment": {
+                    "edges": [
+                        _comment_edge("ana_silva92", "Quanto custa?", replied_by="perfil_fake"),
+                        _comment_edge("joao99", "Lindo", replied_by="outra_pessoa"),
+                    ]
+                }
+            }
+        }
+    }
+    post = FakePost(
+        1, "abc", "legenda", 10, 483, datetime.now(timezone.utc),
+        comments_error=instaloader.exceptions.ConnectionException("something went wrong"),
+        context=FakeGraphQLContext(graphql_response),
+    )
+
+    with caplog.at_level("WARNING"):
+        comments = scraper._fetch_real_comments(post, "perfil_fake")
+
+    assert comments[0]["respondido"] is True
+    assert comments[1]["respondido"] is False
+
+
+def test_fetch_real_comments_returns_empty_when_graphql_fallback_also_fails(caplog):
+    post = FakePost(
+        1, "abc", "legenda", 10, 483, datetime.now(timezone.utc),
+        comments_error=instaloader.exceptions.ConnectionException("something went wrong"),
+        context=FakeGraphQLContext(instaloader.exceptions.ConnectionException("graphql também falhou")),
+    )
+
+    with caplog.at_level("WARNING"):
+        comments = scraper._fetch_real_comments(post, "perfil_fake")
+
+    assert comments == []
+
+
+def test_fetch_real_comments_does_not_attempt_graphql_fallback_when_partial_data_already_collected(caplog):
+    # Regressão de comportamento existente (@caroline_tanaka): quando a busca
+    # normal já trouxe alguns comentários antes de falhar no meio da paginação,
+    # mantemos esses dados parciais como estão — não tentamos o fallback por
+    # cima (evita duplicar/misturar dados de fontes diferentes para o mesmo post).
+    context = FakeGraphQLContext({"data": {"shortcode_media": {"edge_media_to_parent_comment": {"edges": []}}}})
+    post = FakePost(
+        1, "abc", "legenda", 10, 2, datetime.now(timezone.utc),
+        comments=[FakeComment("ana_silva92", "Quanto custa?")],
+        comments_error=instaloader.exceptions.ConnectionException("something went wrong"),
+        context=context,
+    )
+
+    with caplog.at_level("WARNING"):
+        comments = scraper._fetch_real_comments(post, "perfil_fake")
+
+    assert comments == [{"username": "ana_silva92", "texto": "Quanto custa?", "respondido": False}]
+    assert context.calls == []
+
+
 def test_instaloader_fetch_fn_continues_to_next_post_when_one_posts_comments_fail(monkeypatch, caplog):
     class FakeProfile:
         username = "perfil_fake"
@@ -593,6 +758,192 @@ def test_instaloader_fetch_fn_raises_clear_error_on_deleted_schema_400(monkeypat
             assert "instagram" in message
 
     assert "silviabraz" in caplog.text
+
+
+def test_instaloader_fetch_fn_raises_clear_error_on_deleted_schema_400_real_exception_type(monkeypatch, caplog):
+    # Regressão: validação ao vivo contra @silviabraz (2026-08-12) mostrou que a
+    # exceção REAL levantada por InstaloaderContext.get_json() para HTTP 400 é
+    # QueryReturnedBadRequestException — que NÃO é subclasse de
+    # ConnectionException (ver instaloadercontext.py: o except que faz
+    # retry/wrap só cobre ConnectionException). Um `except ConnectionException`
+    # sozinho nunca captura esse erro real; ele escapava para o `except
+    # Exception` genérico, pulando o fallback via topsearch por completo.
+    def _raise_deleted_schema(context, username):
+        raise instaloader.exceptions.QueryReturnedBadRequestException(DELETED_SCHEMA_400_MSG)
+
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", FakeInstaloader)
+    monkeypatch.setattr(scraper.instaloader.Profile, "from_username", staticmethod(_raise_deleted_schema))
+
+    with caplog.at_level("ERROR"):
+        try:
+            scraper.instaloader_fetch_fn("silviabraz", cookies=None)
+            assert False, "esperava ScraperUnavailableError"
+        except scraper.ScraperUnavailableError as exc:
+            message = str(exc).lower()
+            assert "schema" in message or "web_profile_info" in message
+            assert "instagram" in message
+
+    assert "silviabraz" in caplog.text
+
+
+class FakeTopSearchResults:
+    """Simula instaloader.TopSearchResults: endpoint diferente
+    (web/search/topsearch/) usado como fallback quando web_profile_info
+    devolve o bug de schema removido. `profiles_by_searchstring` é um dict
+    controlado por cada teste, mapeando o termo buscado para a lista de
+    perfis candidatos (ou uma exceção a ser levantada, simulando o
+    fallback também falhando)."""
+
+    profiles_by_searchstring = {}
+
+    def __init__(self, context, searchstring):
+        self.context = context
+        self.searchstring = searchstring
+
+    def get_profiles(self):
+        result = FakeTopSearchResults.profiles_by_searchstring.get(self.searchstring, [])
+        if isinstance(result, Exception):
+            raise result
+        return iter(result)
+
+
+class FakeResolvedProfile:
+    """Simula um Profile já com metadados completos (equivalente ao que o
+    Instaloader real produz depois que `_obtain_metadata()` usa a rota
+    GraphQL por doc_id/id numérico — que não depende de web_profile_info)."""
+
+    def __init__(self, username, biography="bio via topsearch", followers=999, posts=None):
+        self.username = username
+        self.biography = biography
+        self.followers = followers
+        self._posts = posts or []
+
+    def get_posts(self):
+        return iter(self._posts)
+
+
+def test_instaloader_fetch_fn_falls_back_to_topsearch_when_deleted_schema_and_logged_in(monkeypatch):
+    # O bug de schema removido só afeta web_profile_info. Com sessão autenticada,
+    # é possível resolver o perfil via TopSearchResults (endpoint diferente) e
+    # deixar o Instaloader completar os metadados pela rota GraphQL por id
+    # numérico, que não usa web_profile_info.
+    class LoggedInContext(FakeContext):
+        is_logged_in = True
+
+    class LoggedInFakeInstaloader(FakeInstaloader):
+        def __init__(self):
+            super().__init__()
+            self.context = LoggedInContext()
+
+    def _raise_deleted_schema(context, username):
+        # QueryReturnedBadRequestException é o tipo real levantado por
+        # InstaloaderContext.get_json() para HTTP 400 (não é subclasse de
+        # ConnectionException) — confirmado ao vivo contra @silviabraz.
+        raise instaloader.exceptions.QueryReturnedBadRequestException(DELETED_SCHEMA_400_MSG)
+
+    recent = datetime.now(timezone.utc) - timedelta(days=1)
+    FakeTopSearchResults.profiles_by_searchstring = {
+        "silviabraz": [
+            FakeResolvedProfile("silviabrazfc"),  # candidato parecido, não é match exato
+            FakeResolvedProfile(
+                "silviabraz",
+                biography="bio real via fallback",
+                followers=2218468,
+                posts=[FakePost(1, "abc", "legenda", 10, 2, recent)],
+            ),
+        ]
+    }
+
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", LoggedInFakeInstaloader)
+    monkeypatch.setattr(scraper.instaloader.Profile, "from_username", staticmethod(_raise_deleted_schema))
+    monkeypatch.setattr(scraper.instaloader, "TopSearchResults", FakeTopSearchResults)
+
+    result = scraper.instaloader_fetch_fn("silviabraz", cookies=None)
+
+    assert result["bio"] == "bio real via fallback"
+    assert result["followers_count"] == 2218468
+    assert result["posts"][0]["post_id"] == "1"
+
+
+def test_instaloader_fetch_fn_raises_scraper_unavailable_when_topsearch_has_no_exact_match(monkeypatch):
+    class LoggedInContext(FakeContext):
+        is_logged_in = True
+
+    class LoggedInFakeInstaloader(FakeInstaloader):
+        def __init__(self):
+            super().__init__()
+            self.context = LoggedInContext()
+
+    def _raise_deleted_schema(context, username):
+        raise instaloader.exceptions.ConnectionException(DELETED_SCHEMA_400_MSG)
+
+    FakeTopSearchResults.profiles_by_searchstring = {
+        "silviabraz": [FakeResolvedProfile("silviabrazfc"), FakeResolvedProfile("silviabrazoficial")],
+    }
+
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", LoggedInFakeInstaloader)
+    monkeypatch.setattr(scraper.instaloader.Profile, "from_username", staticmethod(_raise_deleted_schema))
+    monkeypatch.setattr(scraper.instaloader, "TopSearchResults", FakeTopSearchResults)
+
+    try:
+        scraper.instaloader_fetch_fn("silviabraz", cookies=None)
+        assert False, "esperava ScraperUnavailableError"
+    except scraper.ScraperUnavailableError:
+        pass
+
+
+def test_instaloader_fetch_fn_raises_scraper_unavailable_when_topsearch_itself_fails(monkeypatch):
+    class LoggedInContext(FakeContext):
+        is_logged_in = True
+
+    class LoggedInFakeInstaloader(FakeInstaloader):
+        def __init__(self):
+            super().__init__()
+            self.context = LoggedInContext()
+
+    def _raise_deleted_schema(context, username):
+        raise instaloader.exceptions.ConnectionException(DELETED_SCHEMA_400_MSG)
+
+    FakeTopSearchResults.profiles_by_searchstring = {
+        "silviabraz": instaloader.exceptions.ConnectionException("topsearch também instável"),
+    }
+
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", LoggedInFakeInstaloader)
+    monkeypatch.setattr(scraper.instaloader.Profile, "from_username", staticmethod(_raise_deleted_schema))
+    monkeypatch.setattr(scraper.instaloader, "TopSearchResults", FakeTopSearchResults)
+
+    try:
+        scraper.instaloader_fetch_fn("silviabraz", cookies=None)
+        assert False, "esperava ScraperUnavailableError"
+    except scraper.ScraperUnavailableError:
+        pass
+
+
+def test_instaloader_fetch_fn_skips_topsearch_fallback_when_not_logged_in(monkeypatch):
+    # Anônimo também cai em web_profile_info para completar metadados
+    # (_obtain_metadata), então o fallback não ajudaria — não deve nem ser
+    # tentado.
+    attempted = {"topsearch": False}
+
+    class TrackingFakeTopSearchResults(FakeTopSearchResults):
+        def __init__(self, context, searchstring):
+            attempted["topsearch"] = True
+            super().__init__(context, searchstring)
+
+    def _raise_deleted_schema(context, username):
+        raise instaloader.exceptions.ConnectionException(DELETED_SCHEMA_400_MSG)
+
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", FakeInstaloader)
+    monkeypatch.setattr(scraper.instaloader.Profile, "from_username", staticmethod(_raise_deleted_schema))
+    monkeypatch.setattr(scraper.instaloader, "TopSearchResults", TrackingFakeTopSearchResults)
+
+    try:
+        scraper.instaloader_fetch_fn("silviabraz", cookies=None)
+        assert False, "esperava ScraperUnavailableError"
+    except scraper.ScraperUnavailableError:
+        pass
+
+    assert attempted["topsearch"] is False
 
 
 def test_instaloader_fetch_fn_reraises_other_connection_errors_for_profile_resolution(monkeypatch):

@@ -20,7 +20,7 @@ Implementar a camada de raspagem de dados públicos do Instagram com suporte a c
 ## Critérios de Aceite (Definition of Done)
 - [x] Banco de dados SQLite inicializado automaticamente em `data/cache.db`.
 - [x] Leitura e escrita do cache funcionando corretamente.
-- [ ] Raspagem efetuada com delays de segurança respeitados. **Parcial**: `throttle()` (jitter 2-5s) é chamado antes de qualquer coleta em `scrape_profile`, mas a implementação real de rede ao Instagram (`fetch_fn`) ainda não existe — ver Notas de Implementação.
+- [x] Raspagem efetuada com delays de segurança respeitados. `throttle()` (jitter 2-5s) é chamado antes de qualquer coleta em `scrape_profile`; `instaloader_fetch_fn` (a implementação real de rede via Instaloader, incluindo contornos para os bugs do backend do Instagram) está validada ao vivo contra o Instagram real — ver seções "Validação real" e "Validação ao vivo do contorno" abaixo.
 - [x] Script de teste executado com sucesso (`tests/test_scraper.py`, 6/6 via pytest).
 
 ## Notas de Implementação
@@ -149,3 +149,83 @@ contorno no lado do cliente, `src/scraper.py` foi endurecido para que essas falh
    continuam propagando sem reclassificação, e dois testes provando que uma falha na busca
    de comentários de um post não interrompe a coleta dos demais posts do mesmo perfil.
    Suíte completa: 131 → 135 testes, sempre verde.
+
+## Contorno para o bug de schema e para comentários (2026-08-12)
+Decisão tomada (por pedido explícito do usuário) de investir em contornos próprios para as
+duas pendências reais deixadas pela sessão anterior, em vez de só aguardar correção do lado
+do Instagram:
+
+1. **Tipo real da exceção corrigido**: a exceção efetivamente levantada por
+   `InstaloaderContext.get_json()` para o HTTP 400 do bug de schema é
+   `instaloader.exceptions.QueryReturnedBadRequestException` — que **não** é subclasse de
+   `ConnectionException` (confirmado lendo `instaloadercontext.py` da lib instalada). O
+   `except ConnectionException` isolado da sessão anterior nunca capturava esse erro de
+   verdade; ele escapava para o `except Exception` genérico, pulando qualquer fallback.
+   Corrigido capturando `(ConnectionException, QueryReturnedBadRequestException)` no mesmo
+   bloco.
+2. **`_resolve_profile_via_topsearch(loader, username)`**: quando `Profile.from_username()`
+   falha com a assinatura do bug de schema removido **e** a sessão está autenticada
+   (`loader.context.is_logged_in`), usa `instaloader.TopSearchResults` — endpoint diferente
+   (`web/search/topsearch/`) — para achar o perfil pelo username exato entre os candidatos, e
+   força a leitura de um atributo (`biography`) para completar os metadados pela rota GraphQL
+   por id numérico (`Profile._obtain_metadata` quando logado), que não passa por
+   `web_profile_info` e por isso não é afetada pelo bug. Anônimo também cairia em
+   `web_profile_info` para completar metadados, então o fallback não é tentado sem sessão.
+   Se não achar candidato com username exatamente igual, ou se o próprio topsearch falhar,
+   levanta `ScraperUnavailableError` (comportamento anterior preservado como último recurso).
+3. **`_fetch_comments_first_page_via_graphql(post, profile_username)`**: quando
+   `post.get_comments()` falha sem coletar nenhum comentário, busca ao menos a 1ª página
+   (até 50) via GraphQL direto (`query_hash` legado, o mesmo que `Post.get_comments()` já usa
+   nativamente para posts com poucos comentários) — um endpoint diferente do endpoint do app
+   iPhone (`i.instagram.com/api/v1/media/.../comments/`) para o qual a própria lib roteia
+   posts com muitos comentários (fallback da lib para a issue #2125 dela), e que se mostrou
+   sistematicamente instável no backend do Instagram. Não tenta paginar além da 1ª página
+   (endpoint legado, paginação não confiável) — uma amostra real é preferível a zero para
+   demografia/antifraude. Só é tentado quando a busca normal não coletou nada; se já havia
+   dados parciais de antes de falhar no meio da paginação, esses são mantidos como estão (não
+   mistura fontes diferentes para o mesmo post).
+4. **Bug adicional encontrado e corrigido nesta frente**: posts fixados (pinned) no topo do
+   grid do Instagram podem ser bem antigos e vêm ANTES da ordem cronológica normal em
+   `profile.get_posts()`. A lógica anterior de corte por janela (`break` no primeiro post fora
+   de `MAX_WINDOW_DAYS`) desistia da coleta inteira ao encontrar o primeiro post fixado antigo,
+   escondendo todos os posts recentes reais que vinham logo em seguida. Corrigido: só se
+   "confia" na ordem cronológica (e para no primeiro post fora da janela) depois do primeiro
+   post que já caiu dentro da janela; antes disso, um post fora da janela é tratado como
+   possível fixado e simplesmente pulado (`continue`), não interrompe a coleta.
+5. Validado via TDD: 10 testes novos em `tests/test_scraper.py` (fallback via topsearch com
+   match exato, sem match, com o próprio topsearch falhando, e pulado quando anônimo;
+   fallback de comentários via GraphQL com sucesso, com respostas marcando `respondido`,
+   falhando também, e não acionado quando já há dados parciais; posts fixados antigos não
+   escondem posts recentes reais). Suíte completa: 135 → 145 testes, sempre verde.
+
+## Validação ao vivo do contorno (2026-08-12, autorizada explicitamente pelo usuário)
+Executado `scraper.scrape_profile("silviabraz", ...)` e
+`scraper.scrape_profile("caroline_tanaka", ...)`, ambos com `cookies=None` (autodetecção da
+sessão real `criativododo`), `window_days=90`, `fetch_fn=scraper.instaloader_fetch_fn`,
+`throttle_fn=scraper.throttle` — mesmas condições da validação anterior, agora contra o
+código do contorno.
+
+**`@silviabraz` — antes falhava 100% com o bug de schema; agora resolve com sucesso:**
+- O fallback via `TopSearchResults` funcionou: perfil resolvido, **60 posts** coletados
+  dentro da janela de 90 dias (antes: falha total, `ScraperUnavailableError`).
+- Comentários reais coletados via fallback GraphQL para os posts amostrados (ex.: 50/80,
+  49/455, 50/195 — o teto de 50 por post do fallback é esperado e documentado no ponto 3
+  acima; a contagem agregada do post, maior, é a real do Instagram).
+
+**`@caroline_tanaka` — confirma que a instabilidade de comentários é sistemática, não
+pontual, e que o fallback recupera dados reais mesmo assim:**
+- O endpoint de comentários do app iPhone (`i.instagram.com/api/v1/media/.../comments/`)
+  falhou com o mesmo erro genérico (`"something went wrong"`) em **100% dos posts
+  amostrados** nesta execução (não uma falha isolada/rate-limit pontual como a hipótese
+  anterior levantava) — confirma a causa raiz que motivou o item 3 acima.
+- Em todos os casos, o fallback via GraphQL recuperou comentários reais mesmo assim (ex.:
+  9/9, 4/4, 4/7, 4/4, 3/7 comentários coletados por post) — a coleta não ficou com zero
+  comentários em nenhum post amostrado.
+- 56 posts coletados dentro da janela de 90 dias, bio e contagem de seguidores reais
+  confirmadas.
+
+**Conclusão**: os dois contornos funcionam contra o Instagram real, validados sem mocks.
+Este ISSUE-0001 é considerado **concluído** — as pendências reais restantes (bug de schema
+do Instagram, instabilidade do endpoint de comentários do app iPhone) agora têm contorno
+funcional no lado do cliente, mesmo que o Instagram nunca corrija os bugs de backend
+subjacentes.
