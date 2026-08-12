@@ -103,6 +103,18 @@ def test_run_pipeline_detects_sponsored_posts_in_demo_mode():
     assert all(item["link"] is None or item["link"].startswith("https://www.instagram.com/p/") for item in publis)
 
 
+def test_erro_coleta_indisponivel_shows_exact_required_message():
+    """A mensagem de erro de coleta real deve ser exatamente a exigida — nunca
+    deve sugerir 'Modo demonstração' como alternativa a dados reais."""
+    import app
+
+    assert app.COLETA_INDISPONIVEL_MSG == (
+        "Falha na coleta do Instagram. Verifique o arquivo de sessão local ou "
+        "aguarde alguns minutos antes de tentar novamente."
+    )
+    assert "demonstra" not in app.COLETA_INDISPONIVEL_MSG.lower()
+
+
 def test_run_pipeline_sets_erro_coleta_indisponivel_status(monkeypatch):
     """scraper.ScraperUnavailableError deve virar um status tratado na UI, nunca
     uma exceção crua propagada pela thread de background."""

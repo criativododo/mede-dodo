@@ -33,10 +33,9 @@ RASPAGEM_NAO_IMPLEMENTADA_MSG = (
     "com dados fictícios gerados localmente, sem rede."
 )
 
-COLETA_INDISPONIVEL_MSG_TEMPLATE = (
-    "Não foi possível coletar dados reais agora: {erro} Tente novamente mais "
-    "tarde ou use o \"Modo demonstração\" para validar o pipeline sem "
-    "depender de rede."
+COLETA_INDISPONIVEL_MSG = (
+    "Falha na coleta do Instagram. Verifique o arquivo de sessão local ou "
+    "aguarde alguns minutos antes de tentar novamente."
 )
 
 PIPELINE_STEPS = {
@@ -416,7 +415,8 @@ def main():
     elif status == "erro_scraping_nao_implementado":
         st.warning(RASPAGEM_NAO_IMPLEMENTADA_MSG)
     elif status == "erro_coleta_indisponivel":
-        st.error(COLETA_INDISPONIVEL_MSG_TEMPLATE.format(erro=state.get("erro", "erro desconhecido")))
+        st.error(COLETA_INDISPONIVEL_MSG)
+        st.caption(f"Detalhe técnico: {state.get('erro', 'erro desconhecido')}")
     elif status == "erro":
         st.error(f"Falha ao processar o pipeline: {state.get('erro', 'erro desconhecido')}")
     elif status == "concluido":
