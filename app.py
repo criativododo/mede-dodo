@@ -18,6 +18,10 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import streamlit as st
 
 from src import data_loaders, database, demographics, exporter, filters, metrics, scoring, scraper
@@ -232,17 +236,31 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
         ddd_to_uf = data_loaders.load_ddd_to_uf()
 
         genero_contagem = {"feminino": 0, "masculino": 0, "indeterminado": 0}
-        regioes = []
+        regiao_detections = []
         for c in all_comments_flat:
-            # Comentários reais (instaloader_fetch_fn) só trazem 'username' — sem
-            # 'nome' explícito, deriva um candidato a primeiro nome do @handle.
-            nome = c.get("nome") or demographics.extract_first_name_from_handle(c.get("username")) or "desconhecido"
-            genero = demographics.infer_gender(nome, names_db=names_db)
+            # Comentários com 'nome' explícito (ex.: Modo Demonstração) usam o
+            # nome direto; comentários reais (instaloader_fetch_fn) só trazem
+            # 'username' — tenta cada segmento alfabético do @handle contra a
+            # base IBGE até achar um nome conhecido (prefixos genéricos como
+            # 'style_by_', 'its_', 'eu_' não devem virar indeterminado só por
+            # aparecerem antes do nome real).
+            nome_explicito = c.get("nome")
+            if nome_explicito:
+                genero = demographics.infer_gender(nome_explicito, names_db=names_db)
+            else:
+                genero = demographics.infer_gender_from_handle(c.get("username"), names_db=names_db)
             genero_contagem[genero] = genero_contagem.get(genero, 0) + 1
+
             regiao_result = demographics.infer_region(c.get("texto", ""), ddd_to_uf=ddd_to_uf)
+            ufs_no_comentario = []
             for uf in regiao_result["por_ddd"] + regiao_result["por_mencao"]:
-                if uf not in regioes:
-                    regioes.append(uf)
+                if uf not in ufs_no_comentario:
+                    ufs_no_comentario.append(uf)
+            regiao_detections.extend(ufs_no_comentario)
+
+        regioes = demographics.format_region_distribution(
+            demographics.summarize_region_distribution(regiao_detections)
+        )
 
         state["etapa"] = "pods_score"
         state["progresso"] = PIPELINE_STEPS["pods_score"][1]
@@ -253,7 +271,13 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
         response_rate = (
             sum(1 for c in all_comments_flat if c.get("respondido")) / total_comentarios
         ) if total_comentarios else 0.0
-        score_dodo = scoring.calc_dodo_score(engagement_rate, qualified_ratio, response_rate, pod_result["pod_index"])
+        score_dodo = scoring.calc_dodo_score(
+            engagement_rate,
+            qualified_ratio,
+            response_rate,
+            pod_result["pod_index"],
+            followers_count=followers_count,
+        )
 
         state["etapa"] = "gemini"
         state["progresso"] = PIPELINE_STEPS["gemini"][1]
@@ -389,6 +413,26 @@ def _render_export_buttons(analysis):
     )
 
 
+def _start_pipeline_thread(username, window_days, demo_mode):
+    gemini_client = None
+    if not demo_mode:
+        try:
+            gemini_client = RealGeminiClient()
+        except RuntimeError:
+            # GEMINI_API_KEY ausente: segue sem Gemini, tratado graciosamente
+            # na UI via GEMINI_NAO_CONFIGURADO_MSG — nunca derruba o pipeline.
+            gemini_client = None
+    st.session_state.pipeline_state = {"status": "rodando", "etapa": "coleta", "progresso": 0.0}
+    thread = threading.Thread(
+        target=_run_pipeline,
+        args=(username, window_days, demo_mode, gemini_client, st.session_state.pipeline_state),
+        daemon=True,
+    )
+    st.session_state.pipeline_thread = thread
+    thread.start()
+    st.rerun()
+
+
 def main():
     _init_state()
 
@@ -413,30 +457,20 @@ def main():
             value=False,
         )
         pipeline_running = st.session_state.pipeline_state.get("status") == "rodando"
-        analisar_clicked = st.form_submit_button("Analisar", disabled=pipeline_running)
+        col_analisar, col_limpar = st.columns(2)
+        analisar_clicked = col_analisar.form_submit_button("Analisar", disabled=pipeline_running)
+        limpar_cache_clicked = col_limpar.form_submit_button(
+            "Limpar Cache e Re-analisar Perfil", disabled=pipeline_running
+        )
 
-    if analisar_clicked:
+    if analisar_clicked or limpar_cache_clicked:
         username = _normalize_username(username_input)
         if not username:
             st.warning("Informe um @perfil ou URL do Instagram válido antes de analisar.")
         else:
-            gemini_client = None
-            if not demo_mode:
-                try:
-                    gemini_client = RealGeminiClient()
-                except RuntimeError:
-                    # GEMINI_API_KEY ausente: segue sem Gemini, tratado graciosamente
-                    # na UI via GEMINI_NAO_CONFIGURADO_MSG — nunca derruba o pipeline.
-                    gemini_client = None
-            st.session_state.pipeline_state = {"status": "rodando", "etapa": "coleta", "progresso": 0.0}
-            thread = threading.Thread(
-                target=_run_pipeline,
-                args=(username, window_days, demo_mode, gemini_client, st.session_state.pipeline_state),
-                daemon=True,
-            )
-            st.session_state.pipeline_thread = thread
-            thread.start()
-            st.rerun()
+            if limpar_cache_clicked:
+                database.clear_profile_cache(username)
+            _start_pipeline_thread(username, window_days, demo_mode)
 
     state = st.session_state.pipeline_state
     status = state.get("status", "ocioso")

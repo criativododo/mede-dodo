@@ -83,6 +83,18 @@ def save_profile_data(username, posts, bio=None, followers_count=None, db_path=D
     conn.close()
 
 
+def clear_profile_cache(username, db_path=DB_PATH):
+    """Apaga do cache local todo o perfil e posts de `username` (RF: botão
+    'Limpar Cache e Re-analisar Perfil'). Sem efeito sobre outros perfis; não
+    lança exceção se o username não tiver nada cacheado."""
+    init_db(db_path=db_path)
+    conn = get_connection(db_path)
+    conn.execute("DELETE FROM posts_cache WHERE username = ?", (username,))
+    conn.execute("DELETE FROM profiles WHERE username = ?", (username,))
+    conn.commit()
+    conn.close()
+
+
 def get_cached_data(username, window_days, db_path=DB_PATH):
     init_db(db_path=db_path)
     conn = get_connection(db_path)

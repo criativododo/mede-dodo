@@ -92,3 +92,47 @@ def test_detect_sponsored_posts_link_is_none_without_shortcode():
 
     assert result[0]["link"] is None
     assert result[0]["post_id"] == "9"
+
+
+def test_detect_sponsored_posts_matches_cupom_desconto_provador_and_codigo():
+    posts = [
+        {"post_id": "10", "raw": {"caption": "Cupom especial pra vocês"}},
+        {"post_id": "11", "raw": {"caption": "Desconto de 20% só hoje"}},
+        {"post_id": "12", "raw": {"caption": "Já foi no provador virtual?"}},
+        {"post_id": "13", "raw": {"caption": "Use o código DODO10 no checkout"}},
+    ]
+
+    result = filters.detect_sponsored_posts(posts)
+
+    by_id = {item["post_id"]: item for item in result}
+    assert {"10", "11", "12", "13"} == set(by_id)
+    assert "cupom" in by_id["10"]["termos"]
+    assert "desconto" in by_id["11"]["termos"]
+    assert "provador" in by_id["12"]["termos"]
+    assert "use_o_codigo" in by_id["13"]["termos"]
+
+
+def test_detect_sponsored_posts_matches_colecao_and_external_link():
+    posts = [
+        {"post_id": "14", "raw": {"caption": "Chegou a nova coleção de verão"}},
+        {"post_id": "15", "raw": {"caption": "Compre aqui: https://loja-exemplo.com/produto"}},
+        {"post_id": "16", "raw": {"caption": "Saiba mais em www.loja-exemplo.com/promo"}},
+    ]
+
+    result = filters.detect_sponsored_posts(posts)
+
+    by_id = {item["post_id"]: item for item in result}
+    assert {"14", "15", "16"} == set(by_id)
+    assert "colecao" in by_id["14"]["termos"]
+    assert "link_externo" in by_id["15"]["termos"]
+    assert "link_externo" in by_id["16"]["termos"]
+
+
+def test_detect_sponsored_posts_still_ignores_organic_posts_with_new_keywords():
+    posts = [
+        {"post_id": "17", "raw": {"caption": "Bom dia! Look de hoje, sem parcerias, sem cupons de ninguém."}},
+    ]
+
+    result = filters.detect_sponsored_posts(posts)
+
+    assert result == []
