@@ -170,6 +170,100 @@ def test_run_pipeline_filters_posts_outside_window_and_infers_gender_from_handle
     assert analysis["demografia"]["genero_predominante"] == "feminino"
 
 
+def test_run_pipeline_e2e_with_simulated_real_instagram_profile(monkeypatch):
+    """E2E: simula a API real do Instaloader (sem rede) e roda o pipeline
+    completo (demo_mode=False) fim-a-fim — instaloader_fetch_fn -> cache SQLite
+    -> app._run_pipeline -> analysis. Prova que os dois reparos (comentários
+    reais + janela por data de publicação) se conectam corretamente de ponta
+    a ponta, não só isoladamente por módulo."""
+    import datetime as dt
+
+    import app
+    from src import scraper
+
+    class FakeOwner:
+        def __init__(self, username):
+            self.username = username
+
+    class FakeComment:
+        def __init__(self, owner_username, text):
+            self.owner = FakeOwner(owner_username)
+            self.text = text
+            self.answers = []
+
+    class FakePost:
+        def __init__(self, mediaid, shortcode, caption, likes, comments_count, date_utc, comments):
+            self.mediaid = mediaid
+            self.shortcode = shortcode
+            self.caption = caption
+            self.likes = likes
+            self.comments = comments_count
+            self.date_utc = date_utc
+            self._comments = comments
+
+        def get_comments(self):
+            return iter(self._comments)
+
+    recent = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=5)
+    old = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=200)
+
+    recent_comments = [
+        FakeComment("camila_style23", "Qual o preço desse vestido?"),
+        FakeComment("fernanda.looks", "Vocês têm no tamanho M?"),
+        FakeComment("pedro99_", "Lindo"),
+    ]
+    old_comments = [FakeComment("joao_antigo", "Top")]
+
+    class FakeProfile:
+        username = "perfil_real_e2e"
+        biography = "bio real"
+        followers = 8000
+
+        @staticmethod
+        def get_posts():
+            return iter(
+                [
+                    FakePost(1, "recente", "look novo #publi @marca_parceira", 300, 3, recent, recent_comments),
+                    FakePost(2, "antigo", "look antigo", 50, 1, old, old_comments),
+                ]
+            )
+
+    class FakeContext:
+        pass
+
+    class FakeInstaloader:
+        def __init__(self):
+            self.context = FakeContext()
+
+        def load_session_from_file(self, username, filename):
+            pass
+
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", FakeInstaloader)
+    monkeypatch.setattr(
+        scraper.instaloader.Profile,
+        "from_username",
+        staticmethod(lambda context, username: FakeProfile()),
+    )
+
+    username = f"perfil_real_e2e_{uuid.uuid4().hex}"
+    state = {}
+    app._run_pipeline(username, 90, False, None, state)
+
+    assert state["status"] == "concluido"
+    analysis = state["analysis"]
+
+    # post de 200 dias atrás está fora da janela de 90 dias -> só o post recente conta
+    assert analysis["comentarios_analisados"]["total"] == 3
+    # 2 comentaristas femininas ("camila", "fernanda") vs 1 masculino ("pedro") -> feminino
+    assert analysis["demografia"]["genero_predominante"] == "feminino"
+    assert analysis["demografia"]["genero_pct"]["feminino"] > 0.5
+    # TER calculada só sobre o post dentro da janela (300 likes + 3 comments / 8000 seguidores)
+    assert analysis["engagement_rate"] == (300 + 3) / 8000
+    # publi detectada na legenda do post recente (RF-09)
+    assert len(analysis["publis"]) == 1
+    assert analysis["publis"][0]["link"] == "https://www.instagram.com/p/recente/"
+
+
 def test_erro_coleta_indisponivel_shows_exact_required_message():
     """A mensagem de erro de coleta real deve ser exatamente a exigida — nunca
     deve sugerir 'Modo demonstração' como alternativa a dados reais."""
