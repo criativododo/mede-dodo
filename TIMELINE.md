@@ -81,3 +81,46 @@
 - Validado com teste E2E simulando a API do Instaloader fim-a-fim (comentários, janela,
   gênero, TER, publis), sem mocks de camadas intermediárias.
 - Suíte de testes: 84 → 96.
+
+## 2026-08-12 (reestruturação do pipeline de dados reais e calibragem, commit `d1912fd`)
+- Suíte de testes: 96 → 122 (detalhamento não registrado neste arquivo no momento do
+  commit — lacuna de documentação notada e corrigida agora, na sessão seguinte).
+
+## 2026-08-12 (reparo dos gargalos de coleta do Instagram — login e Erro HTTP 400, ISSUE-0001)
+- Pesquisa prévia obrigatória: o MCP "Perplexity" disponível neste ambiente é escopado à
+  documentação do próprio produto Perplexity (API/SDK), não busca web geral — confirmado
+  na prática (consulta sobre Instaloader devolveu apenas páginas de docs.perplexity.ai).
+  Pesquisa refeita via WebSearch sobre `Instaloader.load_session_from_file` e sobre o Erro
+  HTTP 400 em perfis business/creator (`web_profile_info` anônimo vs. GraphQL autenticado).
+- Dois bugs reais encontrados em `instaloader_fetch_fn` (`src/scraper.py`):
+  1. Sem `INSTAGRAM_SESSION_FILE` no ambiente, a coleta rodava 100% anônima mesmo havendo
+     um arquivo de sessão salvo em `~/.config/instaloader/session-<usuario>` — nunca havia
+     autodetecção. Corrigido com `load_any_available_session(L)`, chamada automaticamente
+     quando `cookies` não é fornecido.
+  2. Quando `cookies` (caminho do arquivo) era fornecido, `load_session_from_file` era
+     chamado com o username do perfil sendo AUDITADO (ex. `silviabraz`), não com o dono real
+     dos cookies (ex. `criativododo`) — identidade trocada. Corrigido derivando o username
+     correto do próprio nome do arquivo (`session-<usuario>`).
+  Ambos os bugs são coerentes com a causa raiz pública do Erro HTTP 400 em perfis
+  business/creator do Instaloader: requisições anônimas caem no endpoint público instável
+  `web_profile_info`; sessões autenticadas usam a rota GraphQL, mais estável.
+- `app.py` ganhou feedback de sessão na sidebar (`_render_session_status_sidebar`):
+  "Sessão ativa: `<usuario>`" ou aviso quando nenhum arquivo de sessão é detectado.
+- Encontrado e corrigido um drift real de dependência: `instaloader` era importado em
+  `src/scraper.py` mas estava ausente de `requirements.txt` (só existia instalado
+  manualmente no `.venv/` pré-existente) — só foi percebido ao recriar o venv do zero nesta
+  sessão. Adicionado `instaloader==4.15.3` (confirmada como a versão mais recente no PyPI).
+- Validado via TDD: 7 testes novos em `tests/test_scraper.py`
+  (`load_any_available_session`, `detect_available_session_username`, autodetecção em
+  `instaloader_fetch_fn`, regressão da identidade trocada) e 2 testes novos em
+  `tests/test_app.py` (feedback de sessão na sidebar via `AppTest`). Também confirmado, sem
+  mocks, que `scraper.detect_available_session_username()` encontra de fato o arquivo
+  `~/.config/instaloader/session-criativododo` presente nesta máquina.
+- **Pendência explícita**: a chamada real a `Profile.from_username` contra o Instagram (ex.
+  `@silviabraz`, `@caroline_tanaka`) não foi disparada nesta sessão — decisão deliberada de
+  não executar uma ação de rede não supervisionada ao vivo contra a conta real e autenticada
+  do usuário. Validar rodando `.venv/bin/python -m streamlit run app.py` e analisando esses
+  perfis manualmente.
+- Suíte de testes: 122 → 131, sempre verde.
+- Documentação (`SPEC-001.md`, `PROGRESS.md`, `docs/issues/ISSUE-0001.md`,
+  `docs/issues/manifest.json`) atualizada para refletir o reparo.

@@ -12,8 +12,20 @@
   `erro_coleta_indisponivel` na UI). Reparado na ISSUE-0008: agora também busca comentários
   reais (`post.get_comments()`) e a data real de publicação de cada post — antes só
   coletava metadados agregados (likes/contagem de comentários), deixando demografia/pods/
-  Gemini sem nenhum dado real para trabalhar. Pendente: validação com sessão/cookies reais
-  do Instagram (não testável localmente sem rede/credenciais neste ambiente).
+  Gemini sem nenhum dado real para trabalhar. Reparado nesta sessão (2026-08-12): (1)
+  `load_any_available_session(L)` autodetecta e carrega `~/.config/instaloader/session-*`
+  automaticamente, sem depender de `INSTAGRAM_SESSION_FILE` — antes, sem essa variável, a
+  coleta rodava 100% anônima mesmo havendo sessão salva; (2) corrigido bug real de
+  identidade trocada — `load_session_from_file` era chamado com o username do perfil
+  ANALISADO (ex. `silviabraz`) em vez do dono real dos cookies (ex. `criativododo`),
+  extraído agora do próprio nome do arquivo de sessão; (3) sidebar do Streamlit mostra
+  "Sessão ativa: `<usuario>`" ou avisa quando nenhuma sessão é detectada; (4) `instaloader`
+  estava ausente de `requirements.txt` (drift de dependência) — adicionado. Essas duas
+  causas explicam o Erro HTTP 400 relatado em perfis business/creator (requisição anônima
+  cai no endpoint público instável `web_profile_info`; sessão autenticada usa GraphQL). Ver
+  `docs/issues/ISSUE-0001.md` (seção "Reparo 2026-08-12") para o detalhamento completo,
+  incluindo a pendência explícita de validação com uma chamada real ao Instagram (não
+  disparada nesta sessão automatizada por prudência).
 - [x] **ISSUE-0002** — Filtragem Heurística e Demografia Local. `src/filters.py`
   (comentários rasos vs. alta intenção comercial) e `src/demographics.py` (gênero/região,
   interfaces injetáveis) prontos e testados. Bug do falso positivo "para" (preposição) → PA
@@ -52,7 +64,7 @@
   que o engine já usa a base real do IBGE, não uma amostra sintética).
 
 ## Testes
-**96/96 passando** (`.venv/bin/python -m pytest tests/`), saída limpa (1 warning de
+**131/131 passando** (`.venv/bin/python -m pytest tests/`), saída limpa (1 warning de
 depreciação do `google.generativeai`, fora do escopo desta sessão).
 Evolução: 28 (ISSUE-0001/2/3) → 43 (+ISSUE-0005) → 57 (+ISSUE-0006) → 61 (+ISSUE-0004)
 → 70 (+fix região "para"/Pará, +`instaloader_fetch_fn` e fallback de cache)
@@ -63,7 +75,13 @@ Evolução: 28 (ISSUE-0001/2/3) → 43 (+ISSUE-0005) → 57 (+ISSUE-0006) → 61
 falha de coleta)
 → 96 (+ISSUE-0008: comentários reais e janela por data de publicação real em
 `instaloader_fetch_fn`, +`extract_first_name_from_handle`, +filtro de janela e fallback de
-nome em `app.py`, +teste E2E simulando a API do Instaloader fim-a-fim).
+nome em `app.py`, +teste E2E simulando a API do Instaloader fim-a-fim)
+→ 122 (sessão de calibragem/reestruturação do pipeline de dados reais, ver commit
+`d1912fd`/ISSUE-0008 no histórico do git — detalhamento não coberto neste arquivo)
+→ 131 (2026-08-12, reparo dos gargalos de login/Erro HTTP 400: +7 testes de
+`load_any_available_session`/`detect_available_session_username`/autodetecção de sessão em
+`instaloader_fetch_fn` em `tests/test_scraper.py`, +2 testes de feedback de sessão na
+sidebar em `tests/test_app.py`).
 
 ## MVP: o que funciona hoje
 Pipeline completo de ponta a ponta (`app.py`) em **Modo Demonstração** (dados fictícios

@@ -54,6 +54,32 @@ def test_app_idle_state_shows_no_analysis_yet():
     assert download_button_labels == []
 
 
+def test_sidebar_shows_active_session_when_session_file_detected(monkeypatch):
+    from src import scraper
+
+    monkeypatch.setattr(scraper, "detect_available_session_username", lambda: "criativododo")
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    sidebar_success_values = [s.value for s in at.sidebar.success]
+    assert any("criativododo" in value for value in sidebar_success_values)
+
+
+def test_sidebar_warns_when_no_session_file_detected(monkeypatch):
+    from src import scraper
+
+    monkeypatch.setattr(scraper, "detect_available_session_username", lambda: None)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    sidebar_warning_values = [w.value for w in at.sidebar.warning]
+    assert any("sess" in value.lower() for value in sidebar_warning_values)
+
+
 def test_app_has_limpar_cache_button():
     at = AppTest.from_file(APP_PATH)
     at.run()

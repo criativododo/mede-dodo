@@ -433,11 +433,27 @@ def _start_pipeline_thread(username, window_days, demo_mode):
     st.rerun()
 
 
+def _render_session_status_sidebar():
+    session_username = scraper.detect_available_session_username()
+    with st.sidebar:
+        st.subheader("Sessão do Instagram")
+        if session_username:
+            st.success(f"Sessão ativa: {session_username}")
+        else:
+            st.warning(
+                "Nenhum arquivo de sessão detectado em "
+                f"{scraper.SESSION_DIR}{os.sep}{scraper.SESSION_FILE_PREFIX}<usuario>. "
+                "Faça login uma vez via `instaloader -l <usuario>` para coletar "
+                "perfis reais (fora do Modo demonstração)."
+            )
+
+
 def main():
     _init_state()
 
     st.title("métricaDODÔ")
     st.caption("Auditoria local de perfis do Instagram para campanhas de marketing — custo zero, 100% offline.")
+    _render_session_status_sidebar()
 
     with st.form("form_analise", clear_on_submit=False):
         username_input = st.text_input(

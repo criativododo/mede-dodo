@@ -240,7 +240,7 @@ class FakeInstaloader:
         self.context = FakeContext()
         self.loaded_session = None
 
-    def load_session_from_file(self, username, filename):
+    def load_session_from_file(self, username, filename=None):
         self.loaded_session = (username, filename)
 
 
@@ -365,3 +365,136 @@ def test_instaloader_fetch_fn_stops_at_safety_cap_of_posts(monkeypatch):
     result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
 
     assert len(result["posts"]) == scraper.MAX_POSTS_SAFETY_CAP
+
+
+def make_session_dir(tmp_path, *usernames):
+    session_dir = tmp_path / "instaloader"
+    session_dir.mkdir()
+    for username in usernames:
+        (session_dir / f"session-{username}").write_bytes(b"cookie-jar-fake")
+    return str(session_dir)
+
+
+def test_detect_available_session_username_finds_file_without_loading(tmp_path, monkeypatch):
+    session_dir = make_session_dir(tmp_path, "criativododo")
+    monkeypatch.setattr(scraper, "SESSION_DIR", session_dir)
+
+    assert scraper.detect_available_session_username() == "criativododo"
+
+
+def test_detect_available_session_username_returns_none_when_dir_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(scraper, "SESSION_DIR", str(tmp_path / "nao_existe"))
+
+    assert scraper.detect_available_session_username() is None
+
+
+def test_load_any_available_session_loads_first_matching_session_file(tmp_path, monkeypatch):
+    session_dir = make_session_dir(tmp_path, "criativododo")
+    monkeypatch.setattr(scraper, "SESSION_DIR", session_dir)
+    loader = FakeInstaloader()
+
+    loaded_username = scraper.load_any_available_session(loader)
+
+    assert loaded_username == "criativododo"
+    assert loader.loaded_session == ("criativododo", os.path.join(session_dir, "session-criativododo"))
+
+
+def test_load_any_available_session_returns_none_when_no_session_files(tmp_path, monkeypatch):
+    session_dir = str(tmp_path / "instaloader_vazio")
+    os.makedirs(session_dir)
+    monkeypatch.setattr(scraper, "SESSION_DIR", session_dir)
+    loader = FakeInstaloader()
+
+    loaded_username = scraper.load_any_available_session(loader)
+
+    assert loaded_username is None
+    assert loader.loaded_session is None
+
+
+def test_load_any_available_session_skips_unreadable_file_and_tries_next(tmp_path, monkeypatch):
+    session_dir = make_session_dir(tmp_path, "conta_corrompida", "criativododo")
+    monkeypatch.setattr(scraper, "SESSION_DIR", session_dir)
+
+    class FlakyInstaloader(FakeInstaloader):
+        def load_session_from_file(self, username, filename=None):
+            if username == "conta_corrompida":
+                raise instaloader.exceptions.LoginException("sessão corrompida")
+            super().load_session_from_file(username, filename)
+
+    loader = FlakyInstaloader()
+
+    loaded_username = scraper.load_any_available_session(loader)
+
+    assert loaded_username == "criativododo"
+
+
+def test_instaloader_fetch_fn_auto_loads_available_session_when_no_cookies_given(tmp_path, monkeypatch):
+    session_dir = make_session_dir(tmp_path, "criativododo")
+    monkeypatch.setattr(scraper, "SESSION_DIR", session_dir)
+
+    created_loaders = []
+
+    class TrackedFakeInstaloader(FakeInstaloader):
+        def __init__(self):
+            super().__init__()
+            created_loaders.append(self)
+
+    class FakeProfile:
+        username = "silviabraz"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            return iter([])
+
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", TrackedFakeInstaloader)
+    monkeypatch.setattr(
+        scraper.instaloader.Profile,
+        "from_username",
+        staticmethod(lambda context, username: FakeProfile()),
+    )
+
+    scraper.instaloader_fetch_fn("silviabraz", cookies=None)
+
+    assert len(created_loaders) == 1
+    assert created_loaders[0].loaded_session == (
+        "criativododo",
+        os.path.join(session_dir, "session-criativododo"),
+    )
+
+
+def test_instaloader_fetch_fn_uses_session_owner_username_from_cookies_path_not_target_profile(monkeypatch):
+    # Regressão: `cookies` aponta para o arquivo de sessão da CONTA LOGADA
+    # (ex.: "criativododo"), que quase nunca é o mesmo perfil sendo analisado
+    # (ex.: "silviabraz"). Antes, o código chamava
+    # load_session_from_file(username=<perfil analisado>, ...), misturando a
+    # identidade da sessão com a do alvo da raspagem.
+    created_loaders = []
+
+    class TrackedFakeInstaloader(FakeInstaloader):
+        def __init__(self):
+            super().__init__()
+            created_loaders.append(self)
+
+    class FakeProfile:
+        username = "silviabraz"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            return iter([])
+
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", TrackedFakeInstaloader)
+    monkeypatch.setattr(
+        scraper.instaloader.Profile,
+        "from_username",
+        staticmethod(lambda context, username: FakeProfile()),
+    )
+
+    cookies_path = "/home/user/.config/instaloader/session-criativododo"
+    result = scraper.instaloader_fetch_fn("silviabraz", cookies=cookies_path)
+
+    assert result["bio"] == "bio fake"
+    assert created_loaders[0].loaded_session == ("criativododo", cookies_path)

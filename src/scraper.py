@@ -1,3 +1,5 @@
+import glob
+import os
 import random
 import time
 from datetime import datetime, timedelta, timezone
@@ -13,6 +15,11 @@ MAX_WINDOW_DAYS = 90
 # Teto de segurança contra paginação sem fim em perfis muito ativos — protege throttling
 # e cota de requisições mesmo que MAX_WINDOW_DAYS não seja atingido (DUMMY.md regra 3).
 MAX_POSTS_SAFETY_CAP = 60
+
+# Local padrão onde `instaloader -l <usuario>` (login manual, fora deste código) salva
+# arquivos de sessão: um por conta, nomeado "session-<usuario>".
+SESSION_DIR = os.path.join(os.path.expanduser("~"), ".config", "instaloader")
+SESSION_FILE_PREFIX = "session-"
 
 
 class ScraperUnavailableError(Exception):
@@ -47,13 +54,63 @@ def _fetch_real_comments(post, profile_username):
     return comments
 
 
+def _session_username_from_path(path):
+    """Deriva o dono da sessão (ex.: "criativododo") a partir do nome de arquivo
+    "session-<usuario>" — NÃO é o perfil sendo analisado. Sem isso,
+    load_session_from_file() era chamado com o username do perfil-alvo (ex.:
+    "silviabraz"), uma identidade que não bate com os cookies carregados."""
+    basename = os.path.basename(path)
+    if basename.startswith(SESSION_FILE_PREFIX):
+        return basename[len(SESSION_FILE_PREFIX):]
+    return None
+
+
+def load_any_available_session(L):
+    """Detecta arquivos de sessão salvos em SESSION_DIR (session-<usuario>) e
+    carrega o primeiro que funcionar no Instaloader `L`, autenticando o
+    contexto sem exigir INSTAGRAM_SESSION_FILE explícito. Necessário porque
+    perfis business/creator devolvem Erro HTTP 400 (endpoint web_profile_info
+    anônimo) quando a coleta roda sem sessão autenticada.
+
+    Retorna o username da sessão carregada, ou None se nenhum arquivo de
+    sessão foi encontrado ou nenhum pôde ser carregado."""
+    pattern = os.path.join(SESSION_DIR, f"{SESSION_FILE_PREFIX}*")
+    for session_path in sorted(glob.glob(pattern)):
+        session_username = _session_username_from_path(session_path)
+        if not session_username:
+            continue
+        try:
+            L.load_session_from_file(session_username, filename=session_path)
+            return session_username
+        except Exception:
+            continue
+    return None
+
+
+def detect_available_session_username():
+    """Detecta (sem carregar cookies) o primeiro arquivo de sessão salvo em
+    SESSION_DIR, para feedback de UI (sidebar do Streamlit) sem o custo de
+    desserializar a sessão a cada rerun. Retorna o username, ou None se
+    nenhum arquivo de sessão foi encontrado."""
+    pattern = os.path.join(SESSION_DIR, f"{SESSION_FILE_PREFIX}*")
+    for session_path in sorted(glob.glob(pattern)):
+        session_username = _session_username_from_path(session_path)
+        if session_username:
+            return session_username
+    return None
+
+
 def instaloader_fetch_fn(username, cookies=None):
     # cookies, se fornecido, é o caminho de um arquivo de sessão local salvo
     # previamente via Instaloader.save_session_to_file (login manual único, fora
-    # deste código) — evita reautenticar a cada coleta.
+    # deste código) — evita reautenticar a cada coleta. Quando não fornecido,
+    # tenta autodetectar qualquer sessão salva em SESSION_DIR.
     loader = instaloader.Instaloader()
     if cookies:
-        loader.load_session_from_file(username, filename=cookies)
+        session_username = _session_username_from_path(cookies) or username
+        loader.load_session_from_file(session_username, filename=cookies)
+    else:
+        load_any_available_session(loader)
 
     profile = instaloader.Profile.from_username(loader.context, username)
     cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_WINDOW_DAYS)
