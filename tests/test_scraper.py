@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -199,40 +200,71 @@ def test_scrape_profile_raises_scraper_unavailable_error_when_fetch_fails_and_no
         os.unlink(db_path)
 
 
-def test_instaloader_fetch_fn_maps_profile_and_posts_without_network(monkeypatch):
-    class FakePost:
-        def __init__(self, mediaid, shortcode, caption, likes, comments):
-            self.mediaid = mediaid
-            self.shortcode = shortcode
-            self.caption = caption
-            self.likes = likes
-            self.comments = comments
+class FakeOwner:
+    def __init__(self, username):
+        self.username = username
 
+
+class FakeAnswer:
+    def __init__(self, owner_username):
+        self.owner = FakeOwner(owner_username)
+
+
+class FakeComment:
+    def __init__(self, owner_username, text, answers=None):
+        self.owner = FakeOwner(owner_username)
+        self.text = text
+        self.answers = answers or []
+
+
+class FakePost:
+    def __init__(self, mediaid, shortcode, caption, likes, comments_count, date_utc, comments=None):
+        self.mediaid = mediaid
+        self.shortcode = shortcode
+        self.caption = caption
+        self.likes = likes
+        self.comments = comments_count
+        self.date_utc = date_utc
+        self._comments = comments or []
+
+    def get_comments(self):
+        return iter(self._comments)
+
+
+class FakeContext:
+    pass
+
+
+class FakeInstaloader:
+    def __init__(self):
+        self.context = FakeContext()
+        self.loaded_session = None
+
+    def load_session_from_file(self, username, filename):
+        self.loaded_session = (username, filename)
+
+
+def _patch_fake_profile(monkeypatch, fake_profile):
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", FakeInstaloader)
+    monkeypatch.setattr(
+        scraper.instaloader.Profile,
+        "from_username",
+        staticmethod(lambda context, username: fake_profile),
+    )
+
+
+def test_instaloader_fetch_fn_maps_profile_and_posts_without_network(monkeypatch):
     class FakeProfile:
+        username = "perfil_fake"
         biography = "bio fake"
         followers = 1234
 
         @staticmethod
         def get_posts():
-            return iter([FakePost(1, "abc", "legenda", 10, 2)])
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+            return iter([FakePost(1, "abc", "legenda", 10, 2, recent)])
 
-    class FakeContext:
-        pass
-
-    class FakeInstaloader:
-        def __init__(self):
-            self.context = FakeContext()
-            self.loaded_session = None
-
-        def load_session_from_file(self, username, filename):
-            self.loaded_session = (username, filename)
-
-    monkeypatch.setattr(scraper.instaloader, "Instaloader", FakeInstaloader)
-    monkeypatch.setattr(
-        scraper.instaloader.Profile,
-        "from_username",
-        staticmethod(lambda context, username: FakeProfile()),
-    )
+    _patch_fake_profile(monkeypatch, FakeProfile())
 
     result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
 
@@ -241,3 +273,95 @@ def test_instaloader_fetch_fn_maps_profile_and_posts_without_network(monkeypatch
     assert result["posts"][0]["post_id"] == "1"
     assert result["posts"][0]["likes_count"] == 10
     assert result["posts"][0]["comments_count"] == 2
+
+
+def test_instaloader_fetch_fn_extracts_real_comments_with_username_and_text(monkeypatch):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+            comments = [FakeComment("ana_silva92", "Quanto custa?")]
+            return iter([FakePost(1, "abc", "legenda", 10, 1, recent, comments=comments)])
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    real_comments = result["posts"][0]["raw"]["comments"]
+    assert real_comments == [{"username": "ana_silva92", "texto": "Quanto custa?", "respondido": False}]
+
+
+def test_instaloader_fetch_fn_marks_respondido_true_when_creator_replies(monkeypatch):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+            comments = [
+                FakeComment("ana_silva92", "Quanto custa?", answers=[FakeAnswer("perfil_fake")]),
+                FakeComment("joao99", "Lindo", answers=[FakeAnswer("outra_pessoa")]),
+            ]
+            return iter([FakePost(1, "abc", "legenda", 10, 2, recent, comments=comments)])
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    real_comments = result["posts"][0]["raw"]["comments"]
+    assert real_comments[0]["respondido"] is True
+    assert real_comments[1]["respondido"] is False
+
+
+def test_instaloader_fetch_fn_excludes_posts_older_than_max_window_days(monkeypatch):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=5)
+            old = datetime.now(timezone.utc) - timedelta(days=scraper.MAX_WINDOW_DAYS + 10)
+            return iter(
+                [
+                    FakePost(1, "recente", "legenda recente", 10, 0, recent),
+                    FakePost(2, "antigo", "legenda antiga", 10, 0, old),
+                ]
+            )
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    post_ids = [p["post_id"] for p in result["posts"]]
+    assert post_ids == ["1"]
+
+
+def test_instaloader_fetch_fn_stops_at_safety_cap_of_posts(monkeypatch):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+
+            def _generate():
+                for i in range(scraper.MAX_POSTS_SAFETY_CAP + 20):
+                    yield FakePost(i, f"sc{i}", "legenda", 1, 0, recent)
+
+            return _generate()
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    assert len(result["posts"]) == scraper.MAX_POSTS_SAFETY_CAP

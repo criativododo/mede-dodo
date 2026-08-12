@@ -1,12 +1,18 @@
-import itertools
 import random
 import time
+from datetime import datetime, timedelta, timezone
 
 import instaloader
 
 from src import database
 
-MAX_POSTS_PER_FETCH = 12
+# Maior janela selecionável em app.py (WINDOW_OPTIONS = [30, 60, 90]) — a coleta real
+# nunca busca posts mais antigos que isso, senão a "janela de análise" da UI não
+# corresponderia aos posts realmente varridos.
+MAX_WINDOW_DAYS = 90
+# Teto de segurança contra paginação sem fim em perfis muito ativos — protege throttling
+# e cota de requisições mesmo que MAX_WINDOW_DAYS não seja atingido (DUMMY.md regra 3).
+MAX_POSTS_SAFETY_CAP = 60
 
 
 class ScraperUnavailableError(Exception):
@@ -19,6 +25,28 @@ def throttle(min_seconds=2, max_seconds=5, sleep_fn=time.sleep, random_fn=random
     return delay
 
 
+def _post_date_utc(post):
+    post_date = post.date_utc
+    if post_date.tzinfo is None:
+        post_date = post_date.replace(tzinfo=timezone.utc)
+    return post_date
+
+
+def _fetch_real_comments(post, profile_username):
+    # RF-06/RF-08 dependem de comentário real (autor + texto), não só da contagem
+    # agregada de post.comments (int) — sem isso, demografia/pods/resposta da
+    # criadora não têm nenhum dado para trabalhar em perfis reais.
+    comments = []
+    for comment in post.get_comments():
+        owner_username = getattr(comment.owner, "username", None)
+        respondido = any(
+            getattr(getattr(answer, "owner", None), "username", None) == profile_username
+            for answer in (comment.answers or [])
+        )
+        comments.append({"username": owner_username, "texto": comment.text, "respondido": respondido})
+    return comments
+
+
 def instaloader_fetch_fn(username, cookies=None):
     # cookies, se fornecido, é o caminho de um arquivo de sessão local salvo
     # previamente via Instaloader.save_session_to_file (login manual único, fora
@@ -28,15 +56,29 @@ def instaloader_fetch_fn(username, cookies=None):
         loader.load_session_from_file(username, filename=cookies)
 
     profile = instaloader.Profile.from_username(loader.context, username)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_WINDOW_DAYS)
 
     posts = []
-    # get_posts() pagina via rede a cada bloco; limitamos a MAX_POSTS_PER_FETCH
-    # para não gerar chamadas extras além do necessário para a janela de análise.
-    for post in itertools.islice(profile.get_posts(), MAX_POSTS_PER_FETCH):
+    # get_posts() retorna do mais recente para o mais antigo — para assim que um post
+    # sair da maior janela selecionável (MAX_WINDOW_DAYS) ou ao atingir o teto de
+    # segurança, o que vier primeiro.
+    for post in profile.get_posts():
+        if len(posts) >= MAX_POSTS_SAFETY_CAP:
+            break
+
+        post_date = _post_date_utc(post)
+        if post_date < cutoff:
+            break
+
         posts.append(
             {
                 "post_id": str(post.mediaid),
-                "raw": {"shortcode": post.shortcode, "caption": post.caption},
+                "raw": {
+                    "shortcode": post.shortcode,
+                    "caption": post.caption,
+                    "published_at": post_date.isoformat(),
+                    "comments": _fetch_real_comments(post, profile.username),
+                },
                 "likes_count": post.likes,
                 "comments_count": post.comments,
             }
