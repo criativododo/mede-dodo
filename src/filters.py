@@ -86,3 +86,44 @@ def is_high_intent_comment(text):
 
 def isolate_high_intent(comments):
     return [comment for comment in comments if is_high_intent_comment(comment)]
+
+
+SPONSORED_PATTERNS = {
+    "#publi": re.compile(r"#publi\w*", re.IGNORECASE),
+    "#ad": re.compile(r"#ad\b", re.IGNORECASE),
+    "parceria": re.compile(r"\bparceria\b", re.IGNORECASE),
+    "patrocinado": re.compile(r"\bpatrocinad[oa]\b", re.IGNORECASE),
+}
+BRAND_MENTION_PATTERN = re.compile(r"@([A-Za-z0-9_.]+)")
+
+
+def detect_sponsored_posts(posts):
+    """RF-09: varre as legendas já coletadas em busca de indícios de conteúdo
+    comercial (publi/parceria/patrocínio), só regex local sobre texto já
+    raspado — sem nenhuma chamada externa."""
+    sponsored = []
+    for post in posts:
+        raw = post.get("raw") or {}
+        caption = raw.get("caption") or ""
+        if not caption:
+            continue
+
+        termos = [nome for nome, pattern in SPONSORED_PATTERNS.items() if pattern.search(caption)]
+        marcas = BRAND_MENTION_PATTERN.findall(caption)
+        if marcas:
+            termos.append("mencao_marca")
+
+        if not termos:
+            continue
+
+        shortcode = raw.get("shortcode")
+        sponsored.append(
+            {
+                "post_id": post.get("post_id"),
+                "shortcode": shortcode,
+                "link": f"https://www.instagram.com/p/{shortcode}/" if shortcode else None,
+                "termos": termos,
+                "marcas": marcas,
+            }
+        )
+    return sponsored
