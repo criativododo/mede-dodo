@@ -119,3 +119,33 @@ contornando a lib) sem alinhamento explícito do usuário, dado o risco de manut
   (`ig_business_category_subvertical`) se resolve nas próximas versões/dias, e decidir se
   vale a pena investir em um contorno próprio para o endpoint de comentários (possível
   rate-limit) e/ou para perfis afetados pelo bug de schema.
+
+## Tratamento de erro resiliente (2026-08-12)
+Como o bug de schema do Instagram e a instabilidade do endpoint de comentários não têm
+contorno no lado do cliente, `src/scraper.py` foi endurecido para que essas falhas reais
+(observadas ao vivo acima) não derrubem a coleta inteira nem a interface:
+
+1. **`Profile.from_username()`** (`instaloader_fetch_fn`) agora está em um `try/except` com
+   dois blocos: um específico para `instaloader.exceptions.ConnectionException` (a família de
+   exceção realmente levantada pelo Instaloader para falhas HTTP/JSON — a versão instalada
+   não expõe uma classe `HTTPException`) e um genérico para `Exception`. Quando a mensagem
+   bate com a assinatura do bug de schema removido (`"has been deleted. you cannot use this
+   schema"`), registra um log de `ERROR` identificando o perfil afetado e levanta
+   `ScraperUnavailableError` com uma mensagem clara de que é um bug do backend do Instagram
+   (não uma falha de sessão local) — evita a mensagem genérica e enganosa de "verifique o
+   arquivo de sessão". Outros erros de conexão continuam propagando sem reclassificação, para
+   que `scrape_profile()` aplique o fallback de cache já existente.
+2. **Busca de comentários** (`_fetch_real_comments`) também ganhou dois blocos de exceção
+   (`ConnectionException` e `Exception` genérica) ao redor da iteração de
+   `post.get_comments()`. Se a busca falhar no meio da paginação de UM post (reproduzido ao
+   vivo em `@caroline_tanaka`), os comentários já obtidos até ali são mantidos (dados
+   parciais), um log de `WARNING` identifica o post e o perfil afetados, e a função retorna
+   normalmente — o post problemático fica com comentários parciais/vazios, mas o loop de
+   `instaloader_fetch_fn` sobre os demais posts do perfil continua normalmente (não aborta a
+   coleta inteira por causa de um post).
+3. Validado via TDD: 4 testes novos em `tests/test_scraper.py` — reprodução exata do erro
+   400 de schema removido (assert que vira `ScraperUnavailableError` com mensagem clara,
+   sem sugerir problema de sessão), regressão confirmando que outros erros de conexão
+   continuam propagando sem reclassificação, e dois testes provando que uma falha na busca
+   de comentários de um post não interrompe a coleta dos demais posts do mesmo perfil.
+   Suíte completa: 131 → 135 testes, sempre verde.

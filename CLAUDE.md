@@ -1,5 +1,9 @@
 # CLAUDE.md — Memória operacional (`metricaDODO`)
 
+## IDIOMA DE COMUNICAÇÃO (OBRIGATÓRIA)
+
+Responda SEMPRE estritamente em Português do Brasil (PT-BR) em todas as respostas, relatórios, resumos e opções. É proibido responder em inglês.
+
 > Governa apenas como as sessões deste projeto iniciam, terminam e sincronizam contexto via o kit `.claude/session-memory/` (ADR-030, repositório `site`).
 
 ## Pendência bloqueante

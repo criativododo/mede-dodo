@@ -1,4 +1,5 @@
 import glob
+import logging
 import os
 import random
 import time
@@ -7,6 +8,16 @@ from datetime import datetime, timedelta, timezone
 import instaloader
 
 from src import database
+
+_logger = logging.getLogger(__name__)
+
+# Assinatura textual do bug atual no backend do próprio Instagram no endpoint
+# web_profile_info (reproduzido ao vivo em 2026-08-12 contra @silviabraz, mesmo
+# com sessão autenticada): um campo de schema interno foi removido do lado deles.
+# Não é falha de sessão/autenticação local — não há contorno no lado do cliente
+# na API pública do Instaloader (Profile.from_username não oferece endpoint
+# alternativo nesta versão).
+_DELETED_SCHEMA_SIGNATURE = "has been deleted. you cannot use this schema"
 
 # Maior janela selecionável em app.py (WINDOW_OPTIONS = [30, 60, 90]) — a coleta real
 # nunca busca posts mais antigos que isso, senão a "janela de análise" da UI não
@@ -44,13 +55,33 @@ def _fetch_real_comments(post, profile_username):
     # agregada de post.comments (int) — sem isso, demografia/pods/resposta da
     # criadora não têm nenhum dado para trabalhar em perfis reais.
     comments = []
-    for comment in post.get_comments():
-        owner_username = getattr(comment.owner, "username", None)
-        respondido = any(
-            getattr(getattr(answer, "owner", None), "username", None) == profile_username
-            for answer in (comment.answers or [])
+    try:
+        for comment in post.get_comments():
+            owner_username = getattr(comment.owner, "username", None)
+            respondido = any(
+                getattr(getattr(answer, "owner", None), "username", None) == profile_username
+                for answer in (comment.answers or [])
+            )
+            comments.append({"username": owner_username, "texto": comment.text, "respondido": respondido})
+    except instaloader.exceptions.ConnectionException as exc:
+        # Bug real observado ao vivo em @caroline_tanaka: a busca de comentários de
+        # UM post pode falhar no meio da paginação (rate limit/instabilidade do
+        # endpoint de comentários do app iPhone). Mantém os comentários já obtidos
+        # (dados parciais) e segue em frente — não deve derrubar a coleta do post
+        # nem dos demais posts/perfis do pipeline.
+        _logger.warning(
+            "Falha de conexão ao buscar comentários do post %s de '%s' — mantendo %d "
+            "comentário(s) já coletado(s) e seguindo em frente: %s",
+            getattr(post, "shortcode", "?"), profile_username, len(comments), exc,
         )
-        comments.append({"username": owner_username, "texto": comment.text, "respondido": respondido})
+    except Exception as exc:
+        # Qualquer outra falha inesperada na busca de comentários também não deve
+        # derrubar a coleta do perfil — só o post afetado fica com dados parciais.
+        _logger.warning(
+            "Falha inesperada ao buscar comentários do post %s de '%s' — mantendo %d "
+            "comentário(s) já coletado(s) e seguindo em frente: %s",
+            getattr(post, "shortcode", "?"), profile_username, len(comments), exc,
+        )
     return comments
 
 
@@ -112,7 +143,25 @@ def instaloader_fetch_fn(username, cookies=None):
     else:
         load_any_available_session(loader)
 
-    profile = instaloader.Profile.from_username(loader.context, username)
+    try:
+        profile = instaloader.Profile.from_username(loader.context, username)
+    except instaloader.exceptions.ConnectionException as exc:
+        if _DELETED_SCHEMA_SIGNATURE in str(exc).lower():
+            _logger.error(
+                "Coleta de '%s' falhou: Instagram devolveu um erro de schema removido "
+                "no endpoint web_profile_info — bug atual no backend do Instagram, não "
+                "é falha de sessão/autenticação local. Detalhe: %s", username, exc,
+            )
+            raise ScraperUnavailableError(
+                f"Instagram recusou a resolução do perfil '{username}' com um erro de "
+                f"schema removido no endpoint web_profile_info (bug atual no backend "
+                f"do Instagram, não é falha de sessão local): {exc}"
+            ) from exc
+        _logger.error("Coleta de '%s' falhou ao resolver o perfil (conexão): %s", username, exc)
+        raise
+    except Exception as exc:
+        _logger.error("Coleta de '%s' falhou de forma inesperada ao resolver o perfil: %s", username, exc)
+        raise
     cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_WINDOW_DAYS)
 
     posts = []

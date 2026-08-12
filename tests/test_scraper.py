@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import instaloader
+
 from src import database
 from src import scraper
 
@@ -218,7 +220,10 @@ class FakeComment:
 
 
 class FakePost:
-    def __init__(self, mediaid, shortcode, caption, likes, comments_count, date_utc, comments=None):
+    def __init__(
+        self, mediaid, shortcode, caption, likes, comments_count, date_utc,
+        comments=None, comments_error=None,
+    ):
         self.mediaid = mediaid
         self.shortcode = shortcode
         self.caption = caption
@@ -226,9 +231,16 @@ class FakePost:
         self.comments = comments_count
         self.date_utc = date_utc
         self._comments = comments or []
+        self._comments_error = comments_error
 
     def get_comments(self):
-        return iter(self._comments)
+        def _generator():
+            for comment in self._comments:
+                yield comment
+            if self._comments_error:
+                raise self._comments_error
+
+        return _generator()
 
 
 class FakeContext:
@@ -498,3 +510,105 @@ def test_instaloader_fetch_fn_uses_session_owner_username_from_cookies_path_not_
 
     assert result["bio"] == "bio fake"
     assert created_loaders[0].loaded_session == ("criativododo", cookies_path)
+
+
+DELETED_SCHEMA_400_MSG = (
+    'JSON Query to api/v1/users/web_profile_info/?username=silviabraz: '
+    '400 Bad Request - "fail" status, message "Asset '
+    'asset://laser.provider/ig_business_category_subvertical has been deleted. '
+    'You cannot use this schema" when accessing '
+    'https://www.instagram.com/api/v1/users/web_profile_info/?username=silviabraz'
+)
+
+
+def test_fetch_real_comments_returns_partial_data_when_comment_fetch_fails_partway(caplog):
+    # Regressão: um bug real do Instagram apareceu ao vivo em @caroline_tanaka —
+    # a busca de comentários de UM post falhou no meio da paginação
+    # (ConnectionException do Instaloader) e derrubava a coleta inteira do perfil.
+    post = FakePost(
+        1, "abc", "legenda", 10, 2, datetime.now(timezone.utc),
+        comments=[FakeComment("ana_silva92", "Quanto custa?")],
+        comments_error=instaloader.exceptions.ConnectionException("something went wrong"),
+    )
+
+    with caplog.at_level("WARNING"):
+        comments = scraper._fetch_real_comments(post, "perfil_fake")
+
+    assert comments == [{"username": "ana_silva92", "texto": "Quanto custa?", "respondido": False}]
+    assert "abc" in caplog.text or "perfil_fake" in caplog.text
+
+
+def test_instaloader_fetch_fn_continues_to_next_post_when_one_posts_comments_fail(monkeypatch, caplog):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+            return iter(
+                [
+                    FakePost(
+                        1, "post_com_falha", "legenda 1", 10, 0, recent,
+                        comments_error=instaloader.exceptions.ConnectionException("something went wrong"),
+                    ),
+                    FakePost(
+                        2, "post_ok", "legenda 2", 5, 1, recent,
+                        comments=[FakeComment("joao99", "Lindo")],
+                    ),
+                ]
+            )
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    with caplog.at_level("WARNING"):
+        result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    # A coleta não é interrompida: os dois posts aparecem no resultado.
+    assert [p["post_id"] for p in result["posts"]] == ["1", "2"]
+    assert result["posts"][0]["raw"]["comments"] == []
+    assert result["posts"][1]["raw"]["comments"] == [
+        {"username": "joao99", "texto": "Lindo", "respondido": False}
+    ]
+
+
+def test_instaloader_fetch_fn_raises_clear_error_on_deleted_schema_400(monkeypatch, caplog):
+    # Regressão: reproduz ao vivo em @silviabraz — Profile.from_username() levanta
+    # ConnectionException com o Erro HTTP 400 de schema removido no backend do
+    # Instagram (endpoint web_profile_info), mesmo com sessão autenticada.
+    def _raise_deleted_schema(context, username):
+        raise instaloader.exceptions.ConnectionException(DELETED_SCHEMA_400_MSG)
+
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", FakeInstaloader)
+    monkeypatch.setattr(scraper.instaloader.Profile, "from_username", staticmethod(_raise_deleted_schema))
+
+    with caplog.at_level("ERROR"):
+        try:
+            scraper.instaloader_fetch_fn("silviabraz", cookies=None)
+            assert False, "esperava ScraperUnavailableError"
+        except scraper.ScraperUnavailableError as exc:
+            message = str(exc).lower()
+            assert "schema" in message or "web_profile_info" in message
+            assert "instagram" in message
+
+    assert "silviabraz" in caplog.text
+
+
+def test_instaloader_fetch_fn_reraises_other_connection_errors_for_profile_resolution(monkeypatch):
+    # Erros de conexão que NÃO são o bug de schema conhecido continuam propagando
+    # sem reclassificação — scrape_profile() já sabe convertê-los em
+    # ScraperUnavailableError (com fallback de cache) no nível acima.
+    def _raise_generic_connection_error(context, username):
+        raise instaloader.exceptions.ConnectionException("Instagram bloqueou temporariamente")
+
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", FakeInstaloader)
+    monkeypatch.setattr(
+        scraper.instaloader.Profile, "from_username", staticmethod(_raise_generic_connection_error)
+    )
+
+    try:
+        scraper.instaloader_fetch_fn("perfil_qualquer", cookies=None)
+        assert False, "esperava ConnectionException"
+    except instaloader.exceptions.ConnectionException as exc:
+        assert "bloqueou" in str(exc)

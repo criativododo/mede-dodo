@@ -37,7 +37,13 @@
   falhou depois ao buscar comentários de um post via `i.instagram.com/api/v1/media/.../
   comments/` (`"something went wrong"` genérico — possivelmente transitório/rate-limit).
   Ver `docs/issues/ISSUE-0001.md` (seção "Validação real 2026-08-12") para o log completo e
-  as opções de próximo passo.
+  as opções de próximo passo. **Tratamento de erro resiliente adicionado em seguida**:
+  `Profile.from_username()` e a busca de comentários (`_fetch_real_comments`) em
+  `src/scraper.py` agora têm blocos `try/except` específicos (`ConnectionException` e
+  `Exception`) que registram log do perfil/post afetado e seguem em frente — o bug de schema
+  do Instagram vira um `ScraperUnavailableError` com mensagem clara (não sugere problema de
+  sessão), e uma falha na busca de comentários de um post não aborta a coleta dos demais
+  posts do perfil. Ver "Tratamento de erro resiliente" em `docs/issues/ISSUE-0001.md`.
 - [x] **ISSUE-0002** — Filtragem Heurística e Demografia Local. `src/filters.py`
   (comentários rasos vs. alta intenção comercial) e `src/demographics.py` (gênero/região,
   interfaces injetáveis) prontos e testados. Bug do falso positivo "para" (preposição) → PA
@@ -93,7 +99,10 @@ nome em `app.py`, +teste E2E simulando a API do Instaloader fim-a-fim)
 → 131 (2026-08-12, reparo dos gargalos de login/Erro HTTP 400: +7 testes de
 `load_any_available_session`/`detect_available_session_username`/autodetecção de sessão em
 `instaloader_fetch_fn` em `tests/test_scraper.py`, +2 testes de feedback de sessão na
-sidebar em `tests/test_app.py`).
+sidebar em `tests/test_app.py`)
+→ 135 (2026-08-12, tratamento de erro resiliente em `Profile.from_username()` e na busca de
+comentários: +4 testes em `tests/test_scraper.py` reproduzindo o erro 400 de schema
+removido e a interrupção parcial da busca de comentários).
 
 ## MVP: o que funciona hoje
 Pipeline completo de ponta a ponta (`app.py`) em **Modo Demonstração** (dados fictícios

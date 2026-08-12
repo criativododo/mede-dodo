@@ -148,3 +148,20 @@
 - Documentação (`PROGRESS.md`, `docs/issues/ISSUE-0001.md`, `docs/issues/manifest.json`)
   atualizada com o resultado real e honesto da validação, incluindo a correção da hipótese
   anterior sobre GraphQL vs. `web_profile_info`.
+
+## 2026-08-12 (idioma PT-BR, merge para main e tratamento de erro resiliente)
+- `CLAUDE.md` ganhou a regra obrigatória de idioma: respostas sempre em Português do Brasil.
+- `src/scraper.py` endurecido contra as duas falhas reais observadas na validação ao vivo:
+  `Profile.from_username()` e `_fetch_real_comments()` (busca de comentários) agora têm
+  blocos `try/except` específicos para `instaloader.exceptions.ConnectionException` e
+  `Exception` genérica (a lib instalada não expõe uma classe `HTTPException`). O bug de
+  schema removido do Instagram (`ig_business_category_subvertical`) vira um
+  `ScraperUnavailableError` com mensagem clara (não sugere falha de sessão); uma falha na
+  busca de comentários de um post mantém os dados parciais já obtidos e não aborta a coleta
+  dos demais posts do perfil. Ambos os caminhos registram log (`ERROR`/`WARNING`)
+  identificando o perfil/post afetado.
+- Suíte de testes: 131 → 135 (4 testes novos reproduzindo os dois cenários reais e
+  confirmando que outros erros de conexão continuam propagando sem reclassificação).
+- Branch `worktree-instagram-scraper-fix` mergeada em `main` (fast-forward) por decisão
+  explícita do usuário, mesmo com a pendência externa documentada (bug de backend do
+  Instagram).
