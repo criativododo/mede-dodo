@@ -110,3 +110,31 @@ def test_infer_gender_female_ratio_above_80_percent_for_spec_names_using_real_ib
         counts = names_db[demographics._normalize_name(nome)]
         total = counts["F"] + counts["M"]
         assert counts["F"] / total > 0.80, nome
+
+
+def test_extract_first_name_from_handle_strips_underscore_suffix():
+    assert demographics.extract_first_name_from_handle("ana_silva92") == "ana"
+
+
+def test_extract_first_name_from_handle_strips_dot_and_digits():
+    assert demographics.extract_first_name_from_handle("joao.pedro99") == "joao"
+
+
+def test_extract_first_name_from_handle_ignores_leading_underscore():
+    assert demographics.extract_first_name_from_handle("_maria2000") == "maria"
+
+
+def test_extract_first_name_from_handle_returns_empty_for_no_letters():
+    assert demographics.extract_first_name_from_handle("12345_") == ""
+
+
+def test_extract_first_name_from_handle_returns_empty_for_falsy_input():
+    assert demographics.extract_first_name_from_handle(None) == ""
+    assert demographics.extract_first_name_from_handle("") == ""
+
+
+def test_extract_first_name_from_handle_feeds_infer_gender_correctly():
+    names_db = data_loaders.load_names_db()
+    nome = demographics.extract_first_name_from_handle("ana_silva92")
+
+    assert demographics.infer_gender(nome, names_db=names_db) == "feminino"

@@ -56,6 +56,21 @@ DEFAULT_NAMES_DB = {
 }
 
 
+HANDLE_NAME_SEGMENT_PATTERN = re.compile(r"[a-zA-ZÀ-ÿ]+")
+
+
+def extract_first_name_from_handle(handle):
+    """Deriva um candidato a primeiro nome a partir de um @handle/username do
+    Instagram (ex.: 'ana_silva92' -> 'ana', '_maria2000' -> 'maria'), sem
+    nenhuma chamada de rede extra — só heurística local sobre o username já
+    coletado. Usado quando o comentário real não vem com um display name
+    próprio (RF-06)."""
+    if not handle:
+        return ""
+    match = HANDLE_NAME_SEGMENT_PATTERN.search(handle)
+    return match.group(0) if match else ""
+
+
 def _normalize_name(name):
     decomposed = unicodedata.normalize("NFKD", name)
     without_accents = "".join(c for c in decomposed if not unicodedata.combining(c))
