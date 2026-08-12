@@ -37,14 +37,27 @@
 - [x] **ISSUE-0006** — Bases Locais de Demografia. `src/data_loaders.py` carrega 1.984
   nomes (base curada, derivada de dataset comunitário que cita a API do IBGE) e 67
   DDD→UF (fonte web, não validada contra a ANATEL oficial nesta sessão — site fora do ar).
+- [x] **ISSUE-0007** — Varredura de Publis (RF-09). `detect_sponsored_posts`
+  (`src/filters.py`) varre legendas via regex (`#publi`, `#ad`, `parceria`, `patrocinado`,
+  menção `@marca`) e está **integrado ao pipeline de `app.py`** (substitui a lista fixa
+  `publis: []`). `demo_fetch_fn` ganhou legendas de exemplo (algumas patrocinadas) para
+  validar o fluxo fim-a-fim sem rede. UI (`_render_publis_card`) e exportador
+  (`src/exporter.py`) não exibem mais texto de "não implementado" — mostram a tabela real
+  ou um estado vazio genuíno (`PUBLIS_VAZIO_MSG`). Também reparado nesta sessão: mensagem de
+  falha de coleta real alinhada ao texto exato exigido (sem sugerir Modo Demonstração como
+  alternativa a dados reais), e `genero_pct` exposto na demografia (prova quantitativa de
+  que o engine já usa a base real do IBGE, não uma amostra sintética).
 
 ## Testes
-**74/74 passando** (`.venv/bin/python -m pytest tests/`), saída limpa (1 warning de
+**84/84 passando** (`.venv/bin/python -m pytest tests/`), saída limpa (1 warning de
 depreciação do `google.generativeai`, fora do escopo desta sessão).
 Evolução: 28 (ISSUE-0001/2/3) → 43 (+ISSUE-0005) → 57 (+ISSUE-0006) → 61 (+ISSUE-0004)
 → 70 (+fix região "para"/Pará, +`instaloader_fetch_fn` e fallback de cache)
 → 74 (+integração dos conectores reais no pipeline de `app.py`, +2 testes de `app.py`,
-+2 testes de regressão do bug de PDF no exportador).
++2 testes de regressão do bug de PDF no exportador)
+→ 84 (+ISSUE-0007: `detect_sponsored_posts` e sua integração ao pipeline/UI/exportador,
++prova de integração do engine demográfico com a base real do IBGE, +mensagem exata de
+falha de coleta).
 
 ## MVP: o que funciona hoje
 Pipeline completo de ponta a ponta (`app.py`) em **Modo Demonstração** (dados fictícios
@@ -63,7 +76,6 @@ mas ainda não foi exercitada contra o Instagram/Gemini reais neste ambiente.
 2. Validar `RealGeminiClient` (`src/gemini_analyzer.py`) contra a API real do Gemini com
    uma `GEMINI_API_KEY` válida — a integração no pipeline de `app.py` já está completa e
    testada com mocks; falta a validação com chamada real — ISSUE-0003.
-3. Varredura de publis (RF-09) — sem issue própria aberta ainda.
-4. Validação da tabela de DDDs contra a fonte oficial ANATEL (indisponível nesta sessão)
+3. Validação da tabela de DDDs contra a fonte oficial ANATEL (indisponível nesta sessão)
    e, se desejado, ampliação da base de nomes além do top-1000/gênero.
-5. Calibração dos pesos do Score DODÔ com dados reais de campanha (hoje é heurística).
+4. Calibração dos pesos do Score DODÔ com dados reais de campanha (hoje é heurística).

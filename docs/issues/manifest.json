@@ -26,7 +26,7 @@
       "title": "Dashboard Streamlit e Exportador",
       "status": "concluida",
       "file": "docs/issues/ISSUE-0004.md",
-      "notas": "app.py (pipeline em thread de background, Modo Demonstração, cards, export HTML/PDF, conectores reais de scraper e Gemini integrados) e src/exporter.py implementados e testados (74/74 na suíte completa). Boot real validado via AppTest. Bug real de PDF corrigido via TDD (FPDFException ao renderizar 2+ itens do Gemini/publis por multi_cell sem new_x/new_y explícitos em loop). RF-09 (publis) segue placeholder explícito, fora do escopo desta issue."
+      "notas": "app.py (pipeline em thread de background, Modo Demonstração, cards, export HTML/PDF, conectores reais de scraper e Gemini integrados) e src/exporter.py implementados e testados (74/74 na suíte completa). Boot real validado via AppTest. Bug real de PDF corrigido via TDD (FPDFException ao renderizar 2+ itens do Gemini/publis por multi_cell sem new_x/new_y explícitos em loop). RF-09 (publis) resolvida na ISSUE-0007."
     },
     {
       "id": "ISSUE-0005",
@@ -41,6 +41,13 @@
       "status": "concluida",
       "file": "docs/issues/ISSUE-0006.md",
       "notas": "src/data_loaders.py implementado e testado (7/7 testes). 1.984 nomes (base curada, fonte comunitária citando API do IBGE) e 67 DDD→UF (fonte web, não validada contra ANATEL oficial — site indisponível na sessão)."
+    },
+    {
+      "id": "ISSUE-0007",
+      "title": "Varredura de Publis (RF-09)",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0007.md",
+      "notas": "detect_sponsored_posts (src/filters.py) implementado e integrado ao pipeline de app.py, substituindo a lista fixa de publis por regex local sobre as legendas coletadas (#publi, #ad, parceria, patrocinado, menção @marca). demo_fetch_fn passou a gerar legendas de exemplo (algumas patrocinadas) para validar o fluxo completo sem rede. UI (_render_publis_card) e exportador (src/exporter.py) deixaram de exibir texto de 'não implementado' — mostram a tabela real ou um estado vazio genuíno. 84/84 testes passando na suíte completa."
     }
   ]
 }

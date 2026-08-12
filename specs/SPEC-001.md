@@ -21,7 +21,7 @@ O **métricaDODÔ** é uma aplicação desktop 100% local criada para auditar a 
 * **RNF-03 (Performance de API):** Máximo de 2 chamadas de API Gemini por perfil analisado.
 * **RNF-04 (Privacidade):** Operação estritamente local, sem envio de dados para servidores terceiros.
 
-## 4. Anexo: Estado de Implementação (atualizado 2026-08-12)
+## 4. Anexo: Estado de Implementação (atualizado 2026-08-12 — ISSUE-0007)
 
 | Item | Status | Issue | Observação |
 |---|---|---|---|
@@ -33,7 +33,7 @@ O **métricaDODÔ** é uma aplicação desktop 100% local criada para auditar a 
 | RF-06 Demografia local | Parcial | ISSUE-0002 / ISSUE-0006 | Gênero via base curada (1.984 nomes, não o dump bruto do IBGE); região via tabela DDD (67 códigos, não validada contra a fonte primária ANATEL nesta sessão). Bug do falso positivo "para" (preposição) → PA (Pará) corrigido: `infer_region` só casa "PA" por menção quando a palavra aparece acentuada ("pará") no texto original |
 | RF-07 Gemini em lote | Feito | ISSUE-0003 | `RealGeminiClient` (SDK `google.generativeai`, JSON estruturado via `response_mime_type`, `GeminiRateLimitError` para cota) implementado e integrado ao pipeline de `app.py` (instanciado quando `GEMINI_API_KEY` está definida; ausência tratada graciosamente, sem quebrar o app). Chamada real à API ainda não foi testada neste ambiente — sem `GEMINI_API_KEY` disponível |
 | RF-08 Antifraude e interação | Feito | ISSUE-0005 | Pods (`calc_pod_index`) e taxa de resposta calculados; ambos dependem de dados reais de coleta (RF-03) para deixar de ser demonstração |
-| RF-09 Varredura de publis | Não implementado | — | Placeholder explícito na UI e nos relatórios; sem issue própria aberta ainda |
+| RF-09 Varredura de publis | Feito | ISSUE-0007 | `detect_sponsored_posts` (`src/filters.py`) varre legendas via regex (`#publi`, `#ad`, `parceria`, `patrocinado`, menção `@marca`) e alimenta a tabela real na UI/exportador. Menção `@handle` sozinha já conta como indício — trade-off de produto que pode gerar falsos positivos, documentado em ISSUE-0007.md |
 | RF-10 Score DODÔ & Dashboard | Feito | ISSUE-0004 / ISSUE-0005 | Score com pesos heurísticos não calibrados com dados reais; dashboard funcional em Modo Demonstração e com os conectores reais (scraper/Gemini) já integrados |
 | RNF-01 Custo zero | Mantido | — | Nenhuma dependência paga introduzida (`instaloader` e `google-generativeai` são open-source/SDK gratuito; cota do Gemini é o plano gratuito) |
 | RNF-02 Rate limit protection | Feito | ISSUE-0001 | Jitter 2-5s, só ativo quando há `fetch_fn` real (nunca em Modo Demonstração) |
