@@ -53,3 +53,31 @@
 - Documentação (`SPEC-001.md`, `DUMMY.md`, `PROGRESS.md`, `docs/issues/manifest.json`)
   atualizada para refletir a integração real concluída, mantendo como pendência explícita a
   validação com credenciais reais (Instagram e Gemini), indisponíveis neste ambiente.
+
+## 2026-08-12 (RF-09 — Varredura de Publis, ISSUE-0007)
+- `detect_sponsored_posts` (`src/filters.py`) implementado via TDD: regex local sobre
+  legendas coletadas (`#publi`, `#ad`, `parceria`, `patrocinado`, menção `@marca`).
+  Integrado ao pipeline de `app.py` (substitui a lista fixa `publis: []`); `demo_fetch_fn`
+  ganhou legendas de exemplo para validar o fluxo fim-a-fim sem rede. UI e exportador
+  (`src/exporter.py`) deixaram de exibir texto de "não implementado".
+- Mensagem de falha de coleta real alinhada ao texto exato exigido; `genero_pct` exposto
+  na demografia como prova quantitativa de que o engine já usa a base real do IBGE.
+- Suíte de testes: 74 → 84.
+
+## 2026-08-12 (Ancoragem na Realidade Física — reparo do pipeline de dados reais, ISSUE-0008)
+- Investigação sistemática (Fase 1: root cause) encontrou uma causa raiz diferente da
+  hipótese inicial (higienização de nome): `instaloader_fetch_fn` nunca chamava
+  `post.get_comments()` — só capturava metadados agregados de post, deixando demografia/
+  pods/Gemini sem nenhum comentário real para processar em qualquer perfil fora do Modo
+  Demonstração. Segunda causa raiz relacionada: nenhuma data real de publicação era
+  capturada, então o seletor de janela (30/60/90 dias) não correspondia aos posts
+  realmente publicados nesse período para dados reais.
+- Corrigido via TDD: `instaloader_fetch_fn` (`src/scraper.py`) agora busca comentários reais
+  (`username`/`texto`/`respondido`) e a data real de publicação de cada post, respeitando
+  `MAX_WINDOW_DAYS=90` e `MAX_POSTS_SAFETY_CAP=60`. `extract_first_name_from_handle`
+  (`src/demographics.py`) deriva um candidato a primeiro nome de um `@handle` sem chamada de
+  rede extra. `app.py` passou a filtrar posts pela data real de publicação e a usar o handle
+  como fallback de nome quando não há `"nome"` explícito no comentário.
+- Validado com teste E2E simulando a API do Instaloader fim-a-fim (comentários, janela,
+  gênero, TER, publis), sem mocks de camadas intermediárias.
+- Suíte de testes: 84 → 96.

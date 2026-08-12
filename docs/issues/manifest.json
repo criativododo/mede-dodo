@@ -5,7 +5,7 @@
       "title": "Módulo de Coleta Local e Cache SQLite",
       "status": "parcial",
       "file": "docs/issues/ISSUE-0001.md",
-      "notas": "Cache SQLite, throttling e orquestração implementados e testados. instaloader_fetch_fn real (sessão local por arquivo de cookies) implementado e integrado ao pipeline de app.py como fetch_fn fora do Modo Demonstração, com fallback gracioso de cache (ScraperUnavailableError tratado na UI). Status permanece 'parcial' apenas porque a validação com sessão/cookies reais do Instagram não foi feita neste ambiente (sem rede/credenciais disponíveis)."
+      "notas": "Cache SQLite, throttling e orquestração implementados e testados. instaloader_fetch_fn real (sessão local por arquivo de cookies) implementado e integrado ao pipeline de app.py como fetch_fn fora do Modo Demonstração, com fallback gracioso de cache (ScraperUnavailableError tratado na UI). Reparo na ISSUE-0008: instaloader_fetch_fn agora também busca comentários reais (autor/texto/resposta da criadora via post.get_comments()) e captura a data real de publicação de cada post, respeitando MAX_WINDOW_DAYS=90 e um teto de segurança de MAX_POSTS_SAFETY_CAP=60 posts — antes só coletava metadados agregados (likes/contagem de comentários), nunca os comentários em si. Status permanece 'parcial' apenas porque a validação com sessão/cookies reais do Instagram não foi feita neste ambiente (sem rede/credenciais disponíveis)."
     },
     {
       "id": "ISSUE-0002",
@@ -48,6 +48,13 @@
       "status": "concluida",
       "file": "docs/issues/ISSUE-0007.md",
       "notas": "detect_sponsored_posts (src/filters.py) implementado e integrado ao pipeline de app.py, substituindo a lista fixa de publis por regex local sobre as legendas coletadas (#publi, #ad, parceria, patrocinado, menção @marca). demo_fetch_fn passou a gerar legendas de exemplo (algumas patrocinadas) para validar o fluxo completo sem rede. UI (_render_publis_card) e exportador (src/exporter.py) deixaram de exibir texto de 'não implementado' — mostram a tabela real ou um estado vazio genuíno. 84/84 testes passando na suíte completa."
+    },
+    {
+      "id": "ISSUE-0008",
+      "title": "Ancoragem na Realidade Física — Reparo do Pipeline de Dados Reais",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0008.md",
+      "notas": "Causa raiz encontrada via investigação sistemática (não a hipótese inicial de 'nome não higienizado'): instaloader_fetch_fn (src/scraper.py) nunca chamava post.get_comments() — só capturava metadados agregados de post (likes, contagem de comentários como int), então RF-05/06/07/08 recebiam lista vazia de comentários para todo perfil real (gênero saía 'indeterminado', não invertido). Corrigido: (1) instaloader_fetch_fn agora busca comentários reais (username/texto/respondido) e a data real de publicação de cada post, respeitando janela de 90 dias e teto de segurança de 60 posts; (2) extract_first_name_from_handle (src/demographics.py) deriva um candidato a primeiro nome de um @handle ('ana_silva92' -> 'ana') sem chamada de rede extra, usado quando o comentário real não tem 'nome' explícito; (3) app.py passou a filtrar posts pela data real de publicação dentro da window_days selecionada (30/60/90), corrigindo a Taxa de Engajamento Real (TER) para refletir só os posts realmente publicados na janela, não os últimos N posts raspados independente da idade. Validado com teste E2E simulando a API do Instaloader fim-a-fim (comentários, janela, gênero, TER, publis). 96/96 testes passando na suíte completa."
     }
   ]
 }

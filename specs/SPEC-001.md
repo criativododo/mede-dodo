@@ -21,23 +21,23 @@ O **métricaDODÔ** é uma aplicação desktop 100% local criada para auditar a 
 * **RNF-03 (Performance de API):** Máximo de 2 chamadas de API Gemini por perfil analisado.
 * **RNF-04 (Privacidade):** Operação estritamente local, sem envio de dados para servidores terceiros.
 
-## 4. Anexo: Estado de Implementação (atualizado 2026-08-12 — ISSUE-0007)
+## 4. Anexo: Estado de Implementação (atualizado 2026-08-12 — ISSUE-0008)
 
 | Item | Status | Issue | Observação |
 |---|---|---|---|
 | RF-01 Input único | Feito | ISSUE-0004 | `app.py` |
-| RF-02 Janela temporal | Feito | ISSUE-0004 | 30/60/90 dias |
-| RF-03 Coleta local | Feito | ISSUE-0001 | `instaloader_fetch_fn` (via lib `instaloader`, sessão local por arquivo de cookies em `INSTAGRAM_SESSION_FILE`) implementado e integrado ao pipeline de `app.py`; cache/throttling/orquestração/fallback também prontos. Validação com sessão real do Instagram (login/cookies de verdade) ainda não foi feita neste ambiente — sem rede/credenciais reais disponíveis para testar |
+| RF-02 Janela temporal | Feito | ISSUE-0004 / ISSUE-0008 | Seletor 30/60/90 dias na UI, e desde a ISSUE-0008 o filtro passou a valer também para dados reais: `app._filter_posts_in_window` descarta posts pela data real de publicação (`raw.published_at`), não só pelo momento em que foram raspados |
+| RF-03 Coleta local | Feito | ISSUE-0001 / ISSUE-0008 | `instaloader_fetch_fn` (via lib `instaloader`, sessão local por arquivo de cookies em `INSTAGRAM_SESSION_FILE`) implementado e integrado ao pipeline de `app.py`; cache/throttling/orquestração/fallback também prontos. Desde a ISSUE-0008 também busca comentários reais (`post.get_comments()`) e a data real de publicação — antes só coletava metadados agregados (likes/contagem de comentários). Validação com sessão real do Instagram (login/cookies de verdade) ainda não foi feita neste ambiente — sem rede/credenciais reais disponíveis para testar |
 | RF-04 Cache local | Feito | ISSUE-0001 | SQLite em `data/cache.db` |
 | RF-05 Filtro heurístico | Feito | ISSUE-0002 | `src/filters.py` |
-| RF-06 Demografia local | Parcial | ISSUE-0002 / ISSUE-0006 | Gênero via base curada (1.984 nomes, não o dump bruto do IBGE); região via tabela DDD (67 códigos, não validada contra a fonte primária ANATEL nesta sessão). Bug do falso positivo "para" (preposição) → PA (Pará) corrigido: `infer_region` só casa "PA" por menção quando a palavra aparece acentuada ("pará") no texto original |
+| RF-06 Demografia local | Parcial | ISSUE-0002 / ISSUE-0006 / ISSUE-0008 | Gênero via base curada (1.984 nomes, não o dump bruto do IBGE); região via tabela DDD (67 códigos, não validada contra a fonte primária ANATEL nesta sessão). Bug do falso positivo "para" (preposição) → PA (Pará) corrigido. Desde a ISSUE-0008, `extract_first_name_from_handle` deriva um candidato a primeiro nome a partir do `@handle` do comentarista quando não há nome de exibição — necessário porque comentários reais só trazem `username`, nunca um "nome" pronto |
 | RF-07 Gemini em lote | Feito | ISSUE-0003 | `RealGeminiClient` (SDK `google.generativeai`, JSON estruturado via `response_mime_type`, `GeminiRateLimitError` para cota) implementado e integrado ao pipeline de `app.py` (instanciado quando `GEMINI_API_KEY` está definida; ausência tratada graciosamente, sem quebrar o app). Chamada real à API ainda não foi testada neste ambiente — sem `GEMINI_API_KEY` disponível |
-| RF-08 Antifraude e interação | Feito | ISSUE-0005 | Pods (`calc_pod_index`) e taxa de resposta calculados; ambos dependem de dados reais de coleta (RF-03) para deixar de ser demonstração |
+| RF-08 Antifraude e interação | Feito | ISSUE-0005 / ISSUE-0008 | Pods (`calc_pod_index`) e taxa de resposta calculados; ambos agora recebem dado real de coleta (RF-03) — antes recebiam sempre lista vazia de comentários para perfis reais, pois `instaloader_fetch_fn` nunca buscava comentários. `respondido` é derivado checando se algum `comment.answers` tem `owner.username` igual ao da criadora |
 | RF-09 Varredura de publis | Feito | ISSUE-0007 | `detect_sponsored_posts` (`src/filters.py`) varre legendas via regex (`#publi`, `#ad`, `parceria`, `patrocinado`, menção `@marca`) e alimenta a tabela real na UI/exportador. Menção `@handle` sozinha já conta como indício — trade-off de produto que pode gerar falsos positivos, documentado em ISSUE-0007.md |
 | RF-10 Score DODÔ & Dashboard | Feito | ISSUE-0004 / ISSUE-0005 | Score com pesos heurísticos não calibrados com dados reais; dashboard funcional em Modo Demonstração e com os conectores reais (scraper/Gemini) já integrados |
 | RNF-01 Custo zero | Mantido | — | Nenhuma dependência paga introduzida (`instaloader` e `google-generativeai` são open-source/SDK gratuito; cota do Gemini é o plano gratuito) |
-| RNF-02 Rate limit protection | Feito | ISSUE-0001 | Jitter 2-5s, só ativo quando há `fetch_fn` real (nunca em Modo Demonstração) |
+| RNF-02 Rate limit protection | Feito | ISSUE-0001 / ISSUE-0008 | Jitter 2-5s, só ativo quando há `fetch_fn` real (nunca em Modo Demonstração); `MAX_POSTS_SAFETY_CAP=60` protege contra paginação sem fim em perfis muito ativos |
 | RNF-03 Máx. 2 chamadas Gemini/perfil | Feito | ISSUE-0003 | `chunk_into_batches` nunca gera mais de 2 lotes |
-| RNF-04 Privacidade/operação local | Mantido | — | Nenhuma chamada de rede real feita ainda nesta sessão de desenvolvimento (nem para Instagram, nem para Gemini) — os conectores existem e estão integrados, mas não foram exercitados contra os serviços reais por falta de credenciais neste ambiente |
+| RNF-04 Privacidade/operação local | Mantido | — | Nenhuma chamada de rede real feita ainda nesta sessão de desenvolvimento (nem para Instagram, nem para Gemini) — os conectores existem e estão integrados e validados com simulação fiel da API (Instaloader mockado), mas não foram exercitados contra os serviços reais por falta de credenciais neste ambiente |
 
-Detalhamento de cada pendência em `docs/issues/ISSUE-000{1,2,3,4,5,6}.md`.
+Detalhamento de cada pendência em `docs/issues/ISSUE-000{1,2,3,4,5,6,7,8}.md`.

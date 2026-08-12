@@ -9,8 +9,11 @@
   e **integrado ao pipeline de `app.py`** (usado como `fetch_fn` sempre que o Modo
   Demonstração está desligado), com fallback gracioso para cache SQLite
   (`ScraperUnavailableError` só quando não há cache algum, agora tratado como status próprio
-  `erro_coleta_indisponivel` na UI). Pendente: validação com sessão/cookies reais do
-  Instagram (não testável localmente sem rede/credenciais neste ambiente).
+  `erro_coleta_indisponivel` na UI). Reparado na ISSUE-0008: agora também busca comentários
+  reais (`post.get_comments()`) e a data real de publicação de cada post — antes só
+  coletava metadados agregados (likes/contagem de comentários), deixando demografia/pods/
+  Gemini sem nenhum dado real para trabalhar. Pendente: validação com sessão/cookies reais
+  do Instagram (não testável localmente sem rede/credenciais neste ambiente).
 - [x] **ISSUE-0002** — Filtragem Heurística e Demografia Local. `src/filters.py`
   (comentários rasos vs. alta intenção comercial) e `src/demographics.py` (gênero/região,
   interfaces injetáveis) prontos e testados. Bug do falso positivo "para" (preposição) → PA
@@ -49,7 +52,7 @@
   que o engine já usa a base real do IBGE, não uma amostra sintética).
 
 ## Testes
-**84/84 passando** (`.venv/bin/python -m pytest tests/`), saída limpa (1 warning de
+**96/96 passando** (`.venv/bin/python -m pytest tests/`), saída limpa (1 warning de
 depreciação do `google.generativeai`, fora do escopo desta sessão).
 Evolução: 28 (ISSUE-0001/2/3) → 43 (+ISSUE-0005) → 57 (+ISSUE-0006) → 61 (+ISSUE-0004)
 → 70 (+fix região "para"/Pará, +`instaloader_fetch_fn` e fallback de cache)
@@ -57,7 +60,10 @@ Evolução: 28 (ISSUE-0001/2/3) → 43 (+ISSUE-0005) → 57 (+ISSUE-0006) → 61
 +2 testes de regressão do bug de PDF no exportador)
 → 84 (+ISSUE-0007: `detect_sponsored_posts` e sua integração ao pipeline/UI/exportador,
 +prova de integração do engine demográfico com a base real do IBGE, +mensagem exata de
-falha de coleta).
+falha de coleta)
+→ 96 (+ISSUE-0008: comentários reais e janela por data de publicação real em
+`instaloader_fetch_fn`, +`extract_first_name_from_handle`, +filtro de janela e fallback de
+nome em `app.py`, +teste E2E simulando a API do Instaloader fim-a-fim).
 
 ## MVP: o que funciona hoje
 Pipeline completo de ponta a ponta (`app.py`) em **Modo Demonstração** (dados fictícios
@@ -65,14 +71,19 @@ determinísticos, sem rede): input → filtragem → demografia → pods/score �
 HTML/PDF exportável. Validado com boot real via `AppTest` (não apenas testes unitários).
 Fora do Modo Demonstração, o pipeline já usa os conectores reais
 (`scraper.instaloader_fetch_fn` e `gemini_analyzer.RealGeminiClient`, este último só quando
-`GEMINI_API_KEY` está definida) — a integração de código está completa e testada com mocks,
+`GEMINI_API_KEY` está definida). Desde a ISSUE-0008, `instaloader_fetch_fn` busca
+comentários reais (não só metadados agregados de post) e filtra posts pela data real de
+publicação dentro da janela selecionada (30/60/90 dias) — a integração de código está
+completa e validada com uma simulação fiel da API do Instaloader (teste E2E fim-a-fim),
 mas ainda não foi exercitada contra o Instagram/Gemini reais neste ambiente.
 
 ## O que falta para sair de "demonstração" para uso real
 1. Validar `instaloader_fetch_fn` (`src/scraper.py`) e a integração em `app.py` contra o
    Instagram real (sessão de cookies de verdade via `INSTAGRAM_SESSION_FILE`) — a
-   interface, a integração no pipeline e o fallback de cache já estão implementados e
-   testados com mocks; falta a validação com rede/conta reais — ISSUE-0001.
+   interface, a integração no pipeline, a busca de comentários reais, o filtro de janela por
+   data de publicação e o fallback de cache já estão implementados e testados com uma
+   simulação fiel da API (Instaloader mockado); falta a validação com rede/conta reais —
+   ISSUE-0001/ISSUE-0008.
 2. Validar `RealGeminiClient` (`src/gemini_analyzer.py`) contra a API real do Gemini com
    uma `GEMINI_API_KEY` válida — a integração no pipeline de `app.py` já está completa e
    testada com mocks; falta a validação com chamada real — ISSUE-0003.

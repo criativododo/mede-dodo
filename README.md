@@ -20,5 +20,9 @@ Aplicação desktop de uso pessoal (MEI) para auditoria e validação de influen
 ## Estado Atual (2026-08-12)
 Pipeline local completo (coleta/cache → filtragem → demografia → pods/score → relatório)
 funcionando de ponta a ponta em **Modo Demonstração** (dados fictícios determinísticos,
-sem rede). Raspagem real do Instagram, cliente Gemini real e varredura de publis (RF-09)
-ainda não implementados — ver `docs/issues/manifest.json` para o status por issue.
+sem rede). Fora do Modo Demonstração, os conectores reais (raspagem via `instaloader`,
+cliente Gemini real, varredura de publis RF-09) já estão implementados e integrados ao
+pipeline — inclusive busca de comentários reais e janela de análise por data real de
+publicação (ISSUE-0008) — mas ainda não foram validados contra o Instagram/Gemini reais
+neste ambiente (sem rede/credenciais disponíveis). Ver `docs/issues/manifest.json` para o
+status por issue.
