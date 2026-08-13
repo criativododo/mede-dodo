@@ -319,8 +319,13 @@ def scrape_profile(
     fetch_fn=None,
     throttle_fn=throttle,
     db_path=database.DB_PATH,
+    source=None,
 ):
-    cached = database.get_cached_data(username, window_days, db_path=db_path)
+    """source="demo"/"real" (opcional): quando informado, um cache gravado com
+    origem diferente é ignorado (cache miss), para nunca misturar dado
+    fictício do Modo Demonstração com dado real do Instagram para o mesmo
+    username. Ver database.get_cached_data."""
+    cached = database.get_cached_data(username, window_days, source=source, db_path=db_path)
     if cached is not None:
         return cached
 
@@ -334,7 +339,7 @@ def scrape_profile(
     try:
         raw = fetch_fn(username, cookies)
     except Exception as exc:
-        fallback = database.get_cached_data(username, window_days=None, db_path=db_path)
+        fallback = database.get_cached_data(username, window_days=None, source=source, db_path=db_path)
         if fallback is not None:
             return fallback
         raise ScraperUnavailableError(
@@ -346,6 +351,7 @@ def scrape_profile(
         raw.get("posts", []),
         bio=raw.get("bio"),
         followers_count=raw.get("followers_count"),
+        source=source,
         db_path=db_path,
     )
-    return database.get_cached_data(username, window_days, db_path=db_path)
+    return database.get_cached_data(username, window_days, source=source, db_path=db_path)

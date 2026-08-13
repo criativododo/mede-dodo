@@ -250,6 +250,7 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
                 fetch_fn=fetch_fn,
                 throttle_fn=throttle_fn,
                 cookies=cookies,
+                source="demo" if demo_mode else "real",
             )
         except NotImplementedError:
             state["status"] = "erro_scraping_nao_implementado"
@@ -336,6 +337,10 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
 
         pod_result = metrics.calc_pod_index(metrics_posts)
         engagement_rate = scoring.calc_engagement_rate(engagement_posts, followers_count)
+        average_engagement = metrics.calc_average_engagement(engagement_posts)
+        fake_followers_estimate = metrics.estimate_fake_followers_risk(
+            engagement_rate, followers_count, pod_result["pod_index"]
+        )
         qualified_ratio = (len(qualified_comments) / total_comentarios) if total_comentarios else 0.0
         response_rate = (
             sum(1 for c in all_comments_flat if c.get("respondido")) / total_comentarios
@@ -377,6 +382,10 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
             "window_days": window_days,
             "score_dodo": score_dodo,
             "engagement_rate": engagement_rate,
+            "followers_count": followers_count,
+            "average_likes": average_engagement["average_likes"],
+            "average_comments": average_engagement["average_comments"],
+            "fake_followers_estimate": fake_followers_estimate,
             "demografia": {
                 "genero_predominante": _genero_predominante(genero_contagem),
                 "genero_pct": _genero_percentuais(genero_contagem),
@@ -415,20 +424,41 @@ def _init_state():
 
 
 def _render_metric_cards(analysis):
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Score DODÔ (0-10)", f"{analysis['score_dodo']:.2f}")
+    # Ordem alinhada ao catálogo P0 do benchmark da concorrência
+    # (SPRINT-002/BENCHMARK-001.md §4.1/§13): leva com os números observados/
+    # derivados do perfil (seguidores, engajamento, seguidores potencialmente
+    # inautênticos, curtidas/comentários médios) antes de qualquer score
+    # proprietário — o benchmark é explícito que abrir com um "score de
+    # influenciador" opaco e só depois explicar os componentes é o maior erro
+    # a evitar (BENCHMARK-001.md §13).
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Seguidores", f"{analysis['followers_count']:,}".replace(",", "."))
     col2.metric("Taxa de engajamento", f"{analysis['engagement_rate'] * 100:.2f}%")
     col2.caption(
         "Referência de mercado (nano/micro-influenciadoras de moda e lifestyle): "
         "engajamento saudável costuma ficar entre ~1,2% e 5%, dependendo do porte do perfil."
     )
-    col3.metric("Índice de pods", f"{analysis['antifraude']['pod_index'] * 100:.1f}%")
-    col4.metric("Taxa de resposta da criadora", f"{analysis['antifraude']['taxa_resposta_criadora'] * 100:.1f}%")
+    fake_estimate = analysis["fake_followers_estimate"]
+    col3.metric("Seguidores potencialmente inautênticos (estimativa)", f"{fake_estimate['value']:.1f}%")
+    col3.caption(
+        "Estimativa heurística local (confiança: "
+        f"{fake_estimate['confidence']}), não equivalente a detectores comerciais "
+        "(Modash/HypeAuditor). Método: déficit de engajamento vs. benchmark do porte + índice de pods."
+    )
+
+    col4, col5 = st.columns(2)
+    col4.metric("Curtidas médias por post", f"{analysis['average_likes']:.0f}")
+    col5.metric("Comentários médios por post", f"{analysis['average_comments']:.0f}")
+
+    col6, col7, col8, col9 = st.columns(4)
+    col6.metric("Score DODÔ (0-10)", f"{analysis['score_dodo']:.2f}")
+    col7.metric("Índice de pods", f"{analysis['antifraude']['pod_index'] * 100:.1f}%")
+    col8.metric("Taxa de resposta da criadora", f"{analysis['antifraude']['taxa_resposta_criadora'] * 100:.1f}%")
     comentarios = analysis["comentarios_analisados"]
     total_comentarios = comentarios["total"]
     taxa_qualificados = (comentarios["qualificados"] / total_comentarios) if total_comentarios else 0.0
-    col5.metric("Taxa de comentários qualificados", f"{taxa_qualificados * 100:.1f}%")
-    col5.caption("Comentários com conteúdo próprio, descontados emojis soltos, elogio genérico e spam/bot.")
+    col9.metric("Taxa de comentários qualificados", f"{taxa_qualificados * 100:.1f}%")
+    col9.caption("Comentários com conteúdo próprio, descontados emojis soltos, elogio genérico e spam/bot.")
 
 
 def _render_demografia_card(analysis):
@@ -535,7 +565,7 @@ def _render_comentarios_card(analysis, gemini_configurado):
         _render_sentimento_card(parecer)
         _render_faixa_etaria_card(parecer)
     if comentarios["gemini_items"]:
-        st.dataframe(comentarios["gemini_items"], use_container_width=True)
+        st.dataframe(comentarios["gemini_items"], width="stretch")
 
 
 def _render_campaign_insights_metric_cards(campaign_insights):

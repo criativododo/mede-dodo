@@ -22,7 +22,8 @@ def init_db(db_path=DB_PATH):
             username TEXT PRIMARY KEY,
             bio TEXT,
             followers_count INTEGER,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            source TEXT
         )
         """
     )
@@ -40,25 +41,39 @@ def init_db(db_path=DB_PATH):
         )
         """
     )
+    # Migração: bancos criados antes da coluna `source` existir não têm essa
+    # coluna. Colunas antigas ficam com source=NULL, o que get_cached_data()
+    # trata como "origem desconhecida" e nunca casa com um pedido explícito de
+    # source="demo" ou source="real" — autocura sem precisar apagar cache antigo.
+    existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(profiles)")}
+    if "source" not in existing_columns:
+        conn.execute("ALTER TABLE profiles ADD COLUMN source TEXT")
     conn.commit()
     conn.close()
 
 
-def save_profile_data(username, posts, bio=None, followers_count=None, db_path=DB_PATH):
+def save_profile_data(username, posts, bio=None, followers_count=None, source=None, db_path=DB_PATH):
     init_db(db_path=db_path)
     conn = get_connection(db_path)
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         """
-        INSERT INTO profiles (username, bio, followers_count, updated_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO profiles (username, bio, followers_count, updated_at, source)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(username) DO UPDATE SET
             bio=excluded.bio,
             followers_count=excluded.followers_count,
-            updated_at=excluded.updated_at
+            updated_at=excluded.updated_at,
+            source=excluded.source
         """,
-        (username, bio, followers_count, now),
+        (username, bio, followers_count, now, source),
     )
+    # Remove o snapshot de posts anterior antes de gravar o novo: sem isso,
+    # uma raspagem real feita depois de uma raspagem em Modo Demonstração (ou
+    # vice-versa) apenas ACRESCENTA posts ao cache existente (post_id de demo
+    # nunca colide com post_id real), misturando comentários fictícios e reais
+    # na mesma resposta de get_cached_data.
+    conn.execute("DELETE FROM posts_cache WHERE username = ?", (username,))
     for post in posts:
         conn.execute(
             """
@@ -95,7 +110,12 @@ def clear_profile_cache(username, db_path=DB_PATH):
     conn.close()
 
 
-def get_cached_data(username, window_days, db_path=DB_PATH):
+def get_cached_data(username, window_days, source=None, db_path=DB_PATH):
+    """source=None (padrão) casa com qualquer origem cacheada (compatibilidade
+    retroativa). Quando o chamador informa source="demo" ou source="real", um
+    cache gravado com origem diferente (ou origem desconhecida, de antes desta
+    coluna existir) é tratado como cache miss — nunca serve dado fictício para
+    um pedido real, nem o contrário."""
     init_db(db_path=db_path)
     conn = get_connection(db_path)
     # window_days=None = sem corte de idade: usado pelo fallback do scraper para
@@ -104,10 +124,16 @@ def get_cached_data(username, window_days, db_path=DB_PATH):
         cutoff = datetime.min.replace(tzinfo=timezone.utc).isoformat()
     else:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
-    profile_row = conn.execute(
-        "SELECT * FROM profiles WHERE username = ? AND updated_at >= ?",
-        (username, cutoff),
-    ).fetchone()
+    if source is None:
+        profile_row = conn.execute(
+            "SELECT * FROM profiles WHERE username = ? AND updated_at >= ?",
+            (username, cutoff),
+        ).fetchone()
+    else:
+        profile_row = conn.execute(
+            "SELECT * FROM profiles WHERE username = ? AND updated_at >= ? AND source = ?",
+            (username, cutoff, source),
+        ).fetchone()
     if profile_row is None:
         conn.close()
         return None
