@@ -184,3 +184,36 @@
   resolve com sucesso (60 posts coletados); `@caroline_tanaka` confirmou que o endpoint de
   comentários do app iPhone falha em 100% dos posts amostrados (não é rate-limit pontual),
   mas o fallback via GraphQL recuperou comentários reais em todos eles. ISSUE-0001 concluída.
+
+## 2026-08-13 (retry com backoff para 429/503 do Gemini + refinamento de qualidade das métricas)
+- Erro real encontrado ao vivo no Streamlit: `503 UNAVAILABLE — This model is currently
+  experiencing high demand`. `RealGeminiClient.generate_content` (`src/gemini_analyzer.py`)
+  passou a fazer retry com backoff exponencial (2s/4s/8s, até 3 retries além da tentativa
+  inicial) para erros 429 (cota) e 503 (alta demanda), antes de relançar
+  `GeminiRateLimitError`; erros não retryable continuam subindo direto. Suíte: 145 → 148 (3
+  testes novos).
+- Pedido explícito do usuário para refinar a qualidade/relevância dos dados exibidos no app
+  (não o layout), usando `FINDER-0001.md` como diretriz canônica — documento que, ao ser
+  lido por completo, se mostrou ser só sobre a migração de SDK já concluída, sem conteúdo
+  sobre relevância de auditoria; o usuário forneceu os critérios diretamente após uma
+  pergunta de esclarecimento. Pesquisa de mercado feita via `WebSearch` (a ferramenta
+  Perplexity disponível na sessão só cobre a documentação do site da Perplexity, não serve
+  para benchmark de mercado) confirmou os critérios: qualidade de comentário pesa mais que
+  volume para intenção de compra; engajamento saudável de nano/micro-influenciadoras de
+  moda/lifestyle varia bastante entre fontes (~1,2% a ~5%); padrões reais de spam/bot
+  (autopromoção, troca de curtida/seguidor, link externo) validam reforçar o filtro local.
+- `src/filters.py`: `is_generic_praise` passou a detectar elogio genérico decorado (ex.:
+  "vc é linda"), sem falso positivo em comentário genuíno mais longo; nova
+  `is_bot_like_comment` filtra spam/autopromoção/link externo.
+- `src/gemini_analyzer.py`: `PROMPT_TEMPLATE` enriquecido para pedir `categoria_sentimento`
+  e `sinais_compra` por comentário — mantidos como campos opcionais (não exigidos por
+  `parse_batch_response`) para preservar retrocompatibilidade total com o schema/testes
+  antigos. Nova função pura `summarize_brand_suitability` calcula localmente (sem chamada
+  extra de API, respeitando o teto de 2 requisições/perfil) um parecer agregado de
+  aderência comercial.
+- `app.py`/`src/exporter.py`: parecer de aderência comercial e sinais/sentimento por
+  comentário passaram a ser exibidos na UI e nos relatórios exportados (HTML/PDF), sem
+  nenhuma alteração de colunas/containers/sidebar/ordem de blocos no Streamlit — validado
+  via `streamlit.testing.v1.AppTest` (equivalente headless de `streamlit run app.py` neste
+  ambiente sem navegador), sem exceções.
+- Suíte de testes: 148 → 162 (14 testes novos).

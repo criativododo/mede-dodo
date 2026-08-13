@@ -50,3 +50,61 @@ Corrigido em `src/gemini_analyzer.py`:
   relança `GeminiRateLimitError` após os backoffs `[2, 4, 8]`, e confirmação de que um erro
   não retryable (400) não aciona nenhum retry nem `time.sleep`. Suíte completa: 145 → 148
   testes, sempre verde (`.venv/bin/python -m pytest tests/`).
+
+## Refinamento de qualidade (2026-08-13)
+Pedido explícito do usuário: aprimorar a QUALIDADE/RELEVÂNCIA/PROFUNDIDADE dos dados exibidos
+no app (o que o Gemini analisa, quais métricas são calculadas, como são apresentadas), sem
+tocar no layout Streamlit de `app.py` (colunas/containers/sidebar/ordem dos blocos
+inalterados). O documento originalmente citado como diretriz canônica
+(`FINDER-0001.md`) acabou sendo só sobre a migração de SDK já concluída (ver seção acima) —
+sem conteúdo sobre relevância de auditoria; o usuário forneceu os critérios diretamente
+(engajamento qualitativo vs. ruído de emojis, intenção de compra, sentimento comercial vs.
+afetivo, aderência comercial). Antes de implementar, pesquisa de mercado via `WebSearch`
+confirmou/refinou esses critérios: (1) qualidade de comentário pesa mais que volume — uma
+pergunta de preço/tamanho vale mais como sinal de conversão do que dezenas de comentários de
+uma palavra; (2) engajamento saudável para nano/micro-influenciadoras de moda/lifestyle varia
+bastante entre fontes (~1,2% a ~5%, dependendo do porte e do estudo) — usado só como
+referência textual, não como corte rígido; (3) padrões reais de spam/bot (`"confira meu
+perfil"`, `"chama no direct pra parceria"`, `"sigo de volta"/"s4s"`, link externo em
+comentário) validam a necessidade de reforçar o filtro local além de emoji-only/elogio de uma
+palavra.
+
+Implementado:
+1. **`src/filters.py`** — `is_generic_praise` passou a detectar elogio genérico também
+   decorado (ex.: `"vc é linda"`, `"que gata"`), removendo palavras de preenchimento
+   (`_FILLER_WORDS`) antes de comparar o restante contra o vocabulário de elogio
+   (`GENERIC_PRAISE_WORDS`, agora com variantes masculinas/femininas); sem falso positivo em
+   comentário genuíno mais longo que só contém uma palavra de elogio no meio (testado). Nova
+   `is_bot_like_comment` filtra link externo em comentário e frases típicas de troca de
+   engajamento/autopromoção validadas pela pesquisa (`_BOT_SPAM_PATTERNS`).
+   `is_shallow_comment` passou a considerar as três frentes (emoji-only, elogio genérico,
+   bot-like).
+2. **`src/gemini_analyzer.py`** — `PROMPT_TEMPLATE` reescrito para pedir, por comentário, além
+   de `intencao_compra`/`faixa_etaria_estimada`: `categoria_sentimento`
+   (`interesse_comercial|validacao_pessoal|duvida_critica|spam_ruido`) e `sinais_compra` (lista
+   de sinais concretos: `preco|tamanho|caimento|tecido|onde_comprar|estoque|depoimento_compra`).
+   `REQUIRED_RESPONSE_FIELDS` **não** foi expandido com os novos campos — continuam opcionais/
+   enriquecimento, nunca exigidos para o item ser aceito por `parse_batch_response` — decisão
+   deliberada para preservar retrocompatibilidade total com mocks/testes no schema antigo de 3
+   campos, conforme pedido explícito do usuário. Nova função pura
+   `summarize_brand_suitability(items, pod_index=None)`: parecer agregado de aderência
+   comercial (indicador alto/médio/baixo/sem_dados, percentuais por categoria de sentimento,
+   contagem de comentários de alta intenção, alertas quando `pod_index` ou proporção de
+   spam/ruído estão elevados) — calculado **localmente** a partir da classificação já feita
+   pelo Gemini, sem nenhuma chamada extra de API (o projeto tem teto de 2 requisições Gemini
+   por perfil, RNF-03).
+3. **`app.py`** — `_run_pipeline` chama `summarize_brand_suitability` após `analyze_comments` e
+   guarda o resultado em `comentarios_analisados.parecer_comercial`. `_render_comentarios_card`
+   passou a exibir esse parecer (indicador + resumo + alertas via `st.warning`) dentro do mesmo
+   subheader já existente, e `_render_metric_cards` ganhou uma `st.caption` de referência de
+   mercado sob a métrica de engajamento — nenhuma coluna/container/sidebar foi adicionada,
+   removida ou reordenada.
+4. **`src/exporter.py`** — HTML e PDF passaram a mostrar a coluna de sentimento/sinais de
+   compra na tabela de comentários e uma seção/parágrafo de parecer de aderência comercial
+   (aditivo via `.get()`, sem quebrar os fixtures antigos de teste que não têm esses campos).
+5. Validação real (fora dos testes automatizados, via scripts descartáveis): pipeline completo
+   simulando um `RealGeminiClient` com o novo schema, fim a fim, incluindo geração de
+   HTML/PDF; e renderização real via `streamlit.testing.v1.AppTest` (equivalente headless de
+   `streamlit run app.py` neste ambiente sem navegador) confirmando ausência de exceções e o
+   texto renderizado como esperado.
+6. Suíte completa: 148 → 162 testes, sempre verde (`.venv/bin/python -m pytest tests/`).

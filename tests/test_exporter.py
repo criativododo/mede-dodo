@@ -104,6 +104,32 @@ def test_generate_html_report_escapes_username_to_avoid_html_injection():
     assert "&lt;script&gt;" in html
 
 
+def test_generate_html_report_shows_parecer_comercial_when_present():
+    analysis = make_analysis()
+    analysis["comentarios_analisados"]["parecer_comercial"] = {
+        "indicador": "alto",
+        "pct_interesse_comercial": 0.6,
+        "pct_validacao_pessoal": 0.2,
+        "pct_duvida_critica": 0.1,
+        "pct_spam_ruido": 0.1,
+        "comentarios_alta_intencao": 2,
+        "alertas": ["Índice de pods elevado (35%) — parte do engajamento pode ser coordenado/artificial."],
+        "resumo": "2 comentário(s) com intenção de compra alta.",
+    }
+
+    html = exporter.generate_html_report(analysis)
+
+    assert "brand suitability" in html.lower()
+    assert "Alto potencial de conversão" in html
+    assert "Índice de pods elevado" in html
+
+
+def test_generate_html_report_omits_parecer_comercial_when_absent():
+    html = exporter.generate_html_report(make_analysis())
+
+    assert "brand suitability" not in html.lower()
+
+
 def test_generate_pdf_report_returns_valid_pdf_bytes():
     pdf_bytes = exporter.generate_pdf_report(make_analysis())
 
@@ -134,6 +160,47 @@ def test_generate_pdf_report_handles_multiple_publis_items():
         {"post_id": "2", "shortcode": "a2", "link": "https://www.instagram.com/p/a2/", "termos": ["parceria"], "marcas": ["marca_b"]},
         {"post_id": "3", "shortcode": "a3", "link": "https://www.instagram.com/p/a3/", "termos": ["patrocinado"], "marcas": ["marca_c"]},
     ]
+
+    pdf_bytes = exporter.generate_pdf_report(analysis)
+
+    assert isinstance(pdf_bytes, (bytes, bytearray))
+    assert bytes(pdf_bytes).startswith(b"%PDF")
+
+
+def test_generate_pdf_report_handles_parecer_comercial_with_multiple_alertas():
+    """Mesma classe de regressão dos outros loops de PDF: parecer_comercial com
+    2+ alertas e itens do Gemini com categoria_sentimento/sinais_compra não
+    pode estourar FPDFException por multi_cell sem new_x/new_y explícitos."""
+    analysis = make_analysis()
+    analysis["comentarios_analisados"]["gemini_items"] = [
+        {
+            "comentario": "Qual o preço desse vestido?",
+            "intencao_compra": "alta",
+            "faixa_etaria_estimada": "25-34",
+            "categoria_sentimento": "interesse_comercial",
+            "sinais_compra": ["preco", "onde_comprar"],
+        },
+        {
+            "comentario": "Vocês têm no tamanho M?",
+            "intencao_compra": "media",
+            "faixa_etaria_estimada": "18-24",
+            "categoria_sentimento": "interesse_comercial",
+            "sinais_compra": ["tamanho"],
+        },
+    ]
+    analysis["comentarios_analisados"]["parecer_comercial"] = {
+        "indicador": "baixo",
+        "pct_interesse_comercial": 0.2,
+        "pct_validacao_pessoal": 0.1,
+        "pct_duvida_critica": 0.1,
+        "pct_spam_ruido": 0.6,
+        "comentarios_alta_intencao": 1,
+        "alertas": [
+            "Índice de pods elevado (42%) — parte do engajamento pode ser coordenado/artificial.",
+            "60% dos comentários qualificados ainda são ruído/spam mesmo após o filtro local.",
+        ],
+        "resumo": "1 comentário(s) com intenção de compra alta.",
+    }
 
     pdf_bytes = exporter.generate_pdf_report(analysis)
 

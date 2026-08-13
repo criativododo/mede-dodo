@@ -9,6 +9,8 @@ import html as html_lib
 
 from fpdf import FPDF
 
+from src.gemini_analyzer import ADERENCIA_INDICADOR_LABELS
+
 PUBLIS_VAZIO_MSG = (
     "Nenhuma publi ou parceria comercial identificada nas legendas coletadas nesta janela."
 )
@@ -109,23 +111,39 @@ def generate_html_report(analysis: dict) -> str:
     total_comentarios = comentarios.get("total", 0)
     qualificados = comentarios.get("qualificados", 0)
     gemini_items = comentarios.get("gemini_items", []) or []
+    parecer_comercial = comentarios.get("parecer_comercial")
     if gemini_items:
         gemini_html = "".join(
             "<tr>"
             f"<td>{html_lib.escape(str(item.get('comentario', '')))}</td>"
             f"<td>{html_lib.escape(str(item.get('intencao_compra', '')))}</td>"
             f"<td>{html_lib.escape(str(item.get('faixa_etaria_estimada', '')))}</td>"
+            f"<td>{html_lib.escape(str(item.get('categoria_sentimento', '')))}</td>"
+            f"<td>{html_lib.escape(', '.join(item.get('sinais_compra') or []))}</td>"
             "</tr>"
             for item in gemini_items
         )
         gemini_section = f"""
         <table>
-            <thead><tr><th>Comentário</th><th>Intenção de compra</th><th>Faixa etária estimada</th></tr></thead>
+            <thead><tr><th>Comentário</th><th>Intenção de compra</th><th>Faixa etária estimada</th><th>Sentimento</th><th>Sinais de compra</th></tr></thead>
             <tbody>{gemini_html}</tbody>
         </table>
         """
     else:
         gemini_section = f"<p class='placeholder'>{html_lib.escape(GEMINI_NAO_CONFIGURADO_MSG)}</p>"
+
+    if parecer_comercial:
+        label = html_lib.escape(
+            ADERENCIA_INDICADOR_LABELS.get(parecer_comercial["indicador"], parecer_comercial["indicador"])
+        )
+        alertas_html = "".join(f"<li>{html_lib.escape(alerta)}</li>" for alerta in parecer_comercial.get("alertas", []))
+        parecer_section = f"""
+        <p><strong>Parecer de aderência comercial (brand suitability):</strong> {label}</p>
+        <p>{html_lib.escape(parecer_comercial.get("resumo", ""))}</p>
+        {f"<ul>{alertas_html}</ul>" if alertas_html else ""}
+        """
+    else:
+        parecer_section = ""
 
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -172,6 +190,7 @@ def generate_html_report(analysis: dict) -> str:
 
   <h2>Comentários analisados</h2>
   <p><strong>Total coletado:</strong> {total_comentarios} — <strong>Qualificados (não rasos):</strong> {qualificados}</p>
+  {parecer_section}
   {gemini_section}
 
   <footer>Relatório gerado localmente por métricaDODÔ. Nenhum dado enviado a terceiros neste export.</footer>
@@ -202,6 +221,7 @@ def generate_pdf_report(analysis: dict) -> bytes:
     total_comentarios = comentarios.get("total", 0)
     qualificados = comentarios.get("qualificados", 0)
     gemini_items = comentarios.get("gemini_items", []) or []
+    parecer_comercial = comentarios.get("parecer_comercial")
 
     pdf = FPDF()
     pdf.set_title(_pdf_safe(f"Relatorio DODO - {username}"))
@@ -263,6 +283,16 @@ def generate_pdf_report(analysis: dict) -> bytes:
         new_x="LMARGIN",
         new_y="NEXT",
     )
+    if parecer_comercial:
+        label = ADERENCIA_INDICADOR_LABELS.get(parecer_comercial["indicador"], parecer_comercial["indicador"])
+        pdf.set_font("helvetica", "B", 10)
+        pdf.multi_cell(0, 6, _pdf_safe(f"Parecer de aderencia comercial (brand suitability): {label}"), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("helvetica", "", 10)
+        pdf.multi_cell(0, 6, _pdf_safe(parecer_comercial.get("resumo", "")), new_x="LMARGIN", new_y="NEXT")
+        for alerta in parecer_comercial.get("alertas", []):
+            pdf.multi_cell(0, 6, _pdf_safe(f"- Alerta: {alerta}"), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(1)
+
     pdf.set_font("helvetica", "I", 10)
     if gemini_items:
         for item in gemini_items:
@@ -270,6 +300,12 @@ def generate_pdf_report(analysis: dict) -> bytes:
                 f"- {item.get('comentario', '')} | intencao: {item.get('intencao_compra', '')} "
                 f"| faixa etaria: {item.get('faixa_etaria_estimada', '')}"
             )
+            sentimento = item.get("categoria_sentimento")
+            if sentimento:
+                texto += f" | sentimento: {sentimento}"
+            sinais = item.get("sinais_compra")
+            if sinais:
+                texto += f" | sinais de compra: {', '.join(sinais)}"
             pdf.multi_cell(0, 6, _pdf_safe(texto), new_x="LMARGIN", new_y="NEXT")
     else:
         pdf.multi_cell(0, 6, _pdf_safe(GEMINI_NAO_CONFIGURADO_MSG))

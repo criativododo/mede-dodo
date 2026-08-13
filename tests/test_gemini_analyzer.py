@@ -84,6 +84,76 @@ def test_build_batch_prompt_includes_all_comments():
     assert "Tem tamanho M?" in prompt
 
 
+def test_prompt_template_requests_sentiment_and_purchase_signal_fields():
+    prompt = gemini_analyzer.build_batch_prompt(["Qual o preço?"])
+
+    assert "categoria_sentimento" in prompt
+    assert "sinais_compra" in prompt
+    for categoria in gemini_analyzer.SENTIMENT_CATEGORIES:
+        assert categoria in prompt
+
+
+def test_parse_batch_response_keeps_legacy_three_field_items_for_backward_compatibility():
+    raw_text = '[{"comentario": "Qual o preço?", "intencao_compra": "alta", "faixa_etaria_estimada": "25-34"}]'
+
+    result = gemini_analyzer.parse_batch_response(raw_text)
+
+    assert result == [
+        {"comentario": "Qual o preço?", "intencao_compra": "alta", "faixa_etaria_estimada": "25-34"}
+    ]
+
+
+def test_parse_batch_response_preserves_extra_enrichment_fields():
+    raw_text = (
+        '[{"comentario": "Qual o preço?", "intencao_compra": "alta", '
+        '"faixa_etaria_estimada": "25-34", "categoria_sentimento": "interesse_comercial", '
+        '"sinais_compra": ["preco"]}]'
+    )
+
+    result = gemini_analyzer.parse_batch_response(raw_text)
+
+    assert result[0]["categoria_sentimento"] == "interesse_comercial"
+    assert result[0]["sinais_compra"] == ["preco"]
+
+
+def test_summarize_brand_suitability_with_no_items_returns_sem_dados():
+    result = gemini_analyzer.summarize_brand_suitability([])
+
+    assert result["indicador"] == "sem_dados"
+    assert result["alertas"] == []
+
+
+def test_summarize_brand_suitability_computes_percentages_and_high_indicador():
+    items = [
+        {"intencao_compra": "alta", "categoria_sentimento": "interesse_comercial"},
+        {"intencao_compra": "alta", "categoria_sentimento": "interesse_comercial"},
+        {"intencao_compra": "alta", "categoria_sentimento": "interesse_comercial"},
+        {"intencao_compra": "nenhuma", "categoria_sentimento": "validacao_pessoal"},
+    ]
+
+    result = gemini_analyzer.summarize_brand_suitability(items, pod_index=0.05)
+
+    assert result["indicador"] == "alto"
+    assert result["comentarios_alta_intencao"] == 3
+    assert result["pct_interesse_comercial"] == 0.75
+    assert result["pct_validacao_pessoal"] == 0.25
+    assert result["alertas"] == []
+
+
+def test_summarize_brand_suitability_flags_high_pod_index_and_spam_ratio():
+    items = [
+        {"intencao_compra": "nenhuma", "categoria_sentimento": "spam_ruido"},
+        {"intencao_compra": "nenhuma", "categoria_sentimento": "spam_ruido"},
+        {"intencao_compra": "nenhuma", "categoria_sentimento": "validacao_pessoal"},
+    ]
+
+    result = gemini_analyzer.summarize_brand_suitability(items, pod_index=0.42)
+
+    assert result["indicador"] == "baixo"
+    assert any("pods" in alerta.lower() for alerta in result["alertas"])
+    assert any("spam" in alerta.lower() or "ruído" in alerta.lower() for alerta in result["alertas"])
+
+
 def test_analyze_batch_returns_parsed_items_on_success():
     client = FakeGeminiClient(
         response_text='[{"comentario": "Qual o preço?", "intencao_compra": "alta", "faixa_etaria_estimada": "25-34"}]'

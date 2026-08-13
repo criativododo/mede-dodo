@@ -20,6 +20,39 @@ def test_filter_comments_treats_generic_short_praise_as_shallow():
     assert result["qualified"] == ["Qual o tamanho disponível?"]
 
 
+def test_filter_comments_treats_decorated_short_praise_as_shallow():
+    result = filters.filter_comments(
+        ["vc é linda", "que gata", "Qual o preço desse vestido?"]
+    )
+
+    assert result["shallow"] == ["vc é linda", "que gata"]
+    assert result["qualified"] == ["Qual o preço desse vestido?"]
+
+
+def test_is_generic_praise_does_not_flag_longer_genuine_comment_containing_praise_word():
+    assert filters.is_generic_praise("Muito linda, mas achei o tecido meio fino") is False
+
+
+def test_is_bot_like_comment_detects_self_promo_and_link_swap_phrases():
+    assert filters.is_bot_like_comment("Confira meu perfil, sigo de volta!") is True
+    assert filters.is_bot_like_comment("Chama no direct pra parceria") is True
+    assert filters.is_bot_like_comment("Olha esse link https://bit.ly/promo123") is True
+    assert filters.is_bot_like_comment("s4s?") is True
+
+
+def test_is_bot_like_comment_does_not_flag_genuine_question():
+    assert filters.is_bot_like_comment("Qual o preço desse vestido?") is False
+
+
+def test_filter_comments_treats_bot_spam_as_shallow():
+    result = filters.filter_comments(
+        ["Confira meu perfil, sigo de volta!", "Vocês têm tamanho G?"]
+    )
+
+    assert result["shallow"] == ["Confira meu perfil, sigo de volta!"]
+    assert result["qualified"] == ["Vocês têm tamanho G?"]
+
+
 def test_classify_intent_detects_all_categories():
     assert filters.classify_intent("Qual o preço desse vestido?") == {"preco"}
     assert filters.classify_intent("De que tecido é feito?") == {"tecido"}

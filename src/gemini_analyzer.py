@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from collections import Counter
 
 from dotenv import load_dotenv
 
@@ -12,7 +13,28 @@ load_dotenv()
 
 DEFAULT_MAX_BATCH_SIZE = 100
 DEFAULT_MAX_BATCHES = 2
+
+# Campos mínimos exigidos de cada item para não quebrar retrocompatibilidade
+# com respostas/mocks do schema anterior — categoria_sentimento e
+# sinais_compra são enriquecimento opcional (usados quando presentes, nunca
+# exigidos para o item ser aceito).
 REQUIRED_RESPONSE_FIELDS = {"comentario", "intencao_compra", "faixa_etaria_estimada"}
+SENTIMENT_CATEGORIES = {"interesse_comercial", "validacao_pessoal", "duvida_critica", "spam_ruido"}
+PURCHASE_SIGNAL_TYPES = {
+    "preco",
+    "tamanho",
+    "caimento",
+    "tecido",
+    "onde_comprar",
+    "estoque",
+    "depoimento_compra",
+}
+ADERENCIA_INDICADOR_LABELS = {
+    "alto": "Alto potencial de conversão",
+    "medio": "Potencial de conversão moderado",
+    "baixo": "Baixo potencial de conversão",
+    "sem_dados": "Sem dados suficientes para avaliar",
+}
 
 _RETRYABLE_ERROR_CODES = {429, 503}
 _RETRYABLE_MESSAGE_SIGNATURES = ("unavailable", "high demand")
@@ -46,10 +68,31 @@ def parse_batch_response(raw_text):
 
 
 PROMPT_TEMPLATE = """\
-Classifique cada comentário abaixo e responda APENAS com uma lista JSON, \
-um objeto por comentário, no formato:
-[{{"comentario": "<texto original>", "intencao_compra": "alta|media|baixa|nenhuma", \
-"faixa_etaria_estimada": "<faixa ou desconhecida>"}}]
+Você é um(a) analista de marketing de influência avaliando, para uma marca que estuda fechar uma \
+campanha paga, se os comentários abaixo indicam interesse comercial real ou só validação afetiva \
+à criadora. Os comentários já passaram por um filtro local que removeu emojis soltos, elogios \
+genéricos de uma palavra (ex.: "linda", "top", "diva") e spam de bot — cada um já tem algum \
+conteúdo próprio. Comentário de qualidade (dúvida específica, opinião fundamentada) vale mais que \
+volume: priorize sinais concretos de intenção de compra (pergunta de preço, tamanho, caimento, \
+tecido, onde comprar, estoque, ou relato de quem já comprou) sobre elogio vago.
+
+Responda APENAS com uma lista JSON, um objeto por comentário, no formato:
+[{{"comentario": "<texto original>", \
+"intencao_compra": "alta|media|baixa|nenhuma", \
+"faixa_etaria_estimada": "<faixa ou desconhecida>", \
+"categoria_sentimento": "interesse_comercial|validacao_pessoal|duvida_critica|spam_ruido", \
+"sinais_compra": ["preco"|"tamanho"|"caimento"|"tecido"|"onde_comprar"|"estoque"|"depoimento_compra", ...]}}]
+
+Critérios:
+- intencao_compra: "alta" para pergunta objetiva de compra (preço/tamanho/onde comprar) ou "vou \
+comprar"/"já comprei"; "media" para interesse real sem pergunta objetiva; "baixa" para elogio com \
+contexto próprio (não genérico); "nenhuma" para o que não tem relação com intenção de compra.
+- categoria_sentimento: "interesse_comercial" quando o foco é o produto/marca; \
+"validacao_pessoal" quando é afeto/elogio à criadora sem foco comercial; "duvida_critica" para \
+dúvida ou crítica sobre marca ou produto; "spam_ruido" quando não há relação real com o conteúdo \
+mesmo tendo passado no filtro local.
+- sinais_compra: liste todos os sinais concretos encontrados no comentário; use lista vazia [] \
+quando não houver nenhum.
 
 Comentários:
 {comentarios}
@@ -114,6 +157,79 @@ def analyze_batch(client, batch):
 
     items = parse_batch_response(response.text)
     return {"status": "ok", "items": items}
+
+
+_INDICADOR_ALTO_PCT_COMERCIAL = 0.3
+_INDICADOR_MEDIO_PCT_COMERCIAL = 0.1
+_ALERTA_POD_INDEX_LIMIAR = 0.3
+_ALERTA_SPAM_RUIDO_LIMIAR = 0.3
+
+
+def summarize_brand_suitability(items, pod_index=None):
+    """Parecer agregado de aderência comercial (brand suitability), calculado
+    localmente a partir da classificação por comentário já feita pelo Gemini
+    (categoria_sentimento/intencao_compra) — sem nenhuma chamada extra de API,
+    já que o projeto tem um teto de 2 requisições Gemini por perfil
+    (RNF-03)."""
+    total = len(items)
+    if total == 0:
+        return {
+            "indicador": "sem_dados",
+            "pct_interesse_comercial": 0.0,
+            "pct_validacao_pessoal": 0.0,
+            "pct_duvida_critica": 0.0,
+            "pct_spam_ruido": 0.0,
+            "comentarios_alta_intencao": 0,
+            "alertas": [],
+            "resumo": "Sem comentários classificados pelo Gemini nesta janela para avaliar aderência comercial.",
+        }
+
+    contagem_sentimento = Counter(item.get("categoria_sentimento") for item in items)
+
+    def pct(categoria):
+        return contagem_sentimento.get(categoria, 0) / total
+
+    pct_comercial = pct("interesse_comercial")
+    pct_pessoal = pct("validacao_pessoal")
+    pct_duvida = pct("duvida_critica")
+    pct_spam = pct("spam_ruido")
+    comentarios_alta_intencao = sum(1 for item in items if item.get("intencao_compra") == "alta")
+
+    alertas = []
+    if pod_index is not None and pod_index >= _ALERTA_POD_INDEX_LIMIAR:
+        alertas.append(
+            f"Índice de pods elevado ({pod_index * 100:.0f}%) — parte do engajamento pode ser "
+            "coordenado/artificial."
+        )
+    if pct_spam >= _ALERTA_SPAM_RUIDO_LIMIAR:
+        alertas.append(
+            f"{pct_spam * 100:.0f}% dos comentários qualificados ainda são ruído/spam mesmo "
+            "após o filtro local."
+        )
+
+    if pct_comercial >= _INDICADOR_ALTO_PCT_COMERCIAL or comentarios_alta_intencao >= max(3, round(total * 0.1)):
+        indicador = "alto"
+    elif pct_comercial >= _INDICADOR_MEDIO_PCT_COMERCIAL or comentarios_alta_intencao > 0:
+        indicador = "medio"
+    else:
+        indicador = "baixo"
+
+    resumo = (
+        f"{comentarios_alta_intencao} comentário(s) com intenção de compra alta; "
+        f"{pct_comercial * 100:.0f}% do público qualificado com foco comercial vs. "
+        f"{pct_pessoal * 100:.0f}% de validação pessoal à criadora."
+    )
+
+    return {
+        "indicador": indicador,
+        "pct_interesse_comercial": pct_comercial,
+        "pct_validacao_pessoal": pct_pessoal,
+        "pct_duvida_critica": pct_duvida,
+        "pct_spam_ruido": pct_spam,
+        "comentarios_alta_intencao": comentarios_alta_intencao,
+        "alertas": alertas,
+        "resumo": resumo,
+    }
 
 
 def analyze_comments(comments, client, max_batch_size=DEFAULT_MAX_BATCH_SIZE, max_batches=DEFAULT_MAX_BATCHES):

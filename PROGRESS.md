@@ -122,6 +122,16 @@ removido e a interrupção parcial da busca de comentários).
 → 145 (2026-08-12, contorno para o bug de schema via `TopSearchResults` e para a
 instabilidade de comentários via GraphQL direto: +10 testes em `tests/test_scraper.py`,
 validado em seguida ao vivo contra `@silviabraz` e `@caroline_tanaka` reais).
+→ 148 (2026-08-13, retry com backoff exponencial em `RealGeminiClient.generate_content`
+para erros temporários 429/503 do Gemini, encontrado ao vivo no Streamlit: +3 testes em
+`tests/test_gemini_analyzer.py`, ver ISSUE-0003.md).
+→ 162 (2026-08-13, refinamento de qualidade das métricas/prompts do Gemini pedido pelo
+usuário: filtro local reforçado contra elogio genérico decorado e comentários bot-like/spam
+(`src/filters.py`), schema do prompt do Gemini enriquecido com `categoria_sentimento`/
+`sinais_compra`, novo parecer local de aderência comercial (`summarize_brand_suitability`)
+exibido em `app.py`/`src/exporter.py` sem alterar o layout Streamlit: +14 testes em
+`tests/test_filters.py`, `tests/test_gemini_analyzer.py` e `tests/test_exporter.py`, ver
+ISSUE-0003.md).
 
 ## MVP: o que funciona hoje
 Pipeline completo de ponta a ponta (`app.py`) em **Modo Demonstração** (dados fictícios

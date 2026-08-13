@@ -5,19 +5,66 @@ GENERIC_PRAISE_WORDS = {
     "linda",
     "lindona",
     "linda demais",
+    "lindo",
+    "lindao",
     "gata",
     "gatona",
+    "gato",
+    "gatao",
     "top",
     "top demais",
     "diva",
     "musa",
     "perfeita",
+    "perfeito",
     "poderosa",
+    "poderoso",
     "arrasou",
     "incrivel",
     "demais",
     "maravilhosa",
+    "maravilhoso",
+    "deusa",
+    "princesa",
+    "rainha",
 }
+
+# palavras de preenchimento sem conteúdo próprio: ignoradas ao avaliar se um
+# comentário decorado (ex.: "vc é linda", "que gata") é, na essência, só um
+# elogio genérico de uma palavra da lista acima.
+_FILLER_WORDS = {
+    "que",
+    "muito",
+    "mt",
+    "mto",
+    "tao",
+    "super",
+    "vc",
+    "voce",
+    "ce",
+    "e",
+    "eh",
+    "ta",
+    "esta",
+    "a",
+    "o",
+    "ai",
+    "aii",
+    "aiii",
+    "mesmo",
+    "msm",
+}
+
+# sinais de spam/bot validados por pesquisa de mercado (auto-promoção,
+# troca de curtida/seguidor, links externos em comentário) — ver
+# docs/issues/ISSUE-0003.md, seção "Refinamento de qualidade (2026-08-13)".
+_BOT_SPAM_PATTERNS = (
+    re.compile(r"confira (o\s+)?meu perfil", re.IGNORECASE),
+    re.compile(r"\bd\.?m\b.{0,15}(parceria|promo|divulga)", re.IGNORECASE),
+    re.compile(r"chama(r)?\s+no\s+(direct|inbox)", re.IGNORECASE),
+    re.compile(r"\bs4s\b", re.IGNORECASE),
+    re.compile(r"sigo de volta|siga de volta|curtida por curtida", re.IGNORECASE),
+)
 
 INTENT_KEYWORDS = {
     "preco": [r"pre[çc]o", r"\bvalor\b", r"quanto (custa|é|fica|sai)"],
@@ -52,12 +99,33 @@ def normalize_text(text):
     return without_accents.strip().lower()
 
 
+def _content_words(text):
+    normalized = normalize_text(text)
+    normalized = re.sub(r"[^\w\s]", " ", normalized)
+    return [word for word in normalized.split() if word and word not in _FILLER_WORDS]
+
+
 def is_generic_praise(text):
-    return normalize_text(text) in GENERIC_PRAISE_WORDS
+    if normalize_text(text) in GENERIC_PRAISE_WORDS:
+        return True
+    words = _content_words(text)
+    return bool(words) and all(word in GENERIC_PRAISE_WORDS for word in words)
+
+
+def is_bot_like_comment(text):
+    """Sinais de spam/bot validados por pesquisa de mercado: comentário só
+    com link externo, ou frases típicas de troca de engajamento/autopromoção
+    (ver docs/issues/ISSUE-0003.md)."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if EXTERNAL_LINK_PATTERN.search(stripped):
+        return True
+    return any(pattern.search(stripped) for pattern in _BOT_SPAM_PATTERNS)
 
 
 def is_shallow_comment(text):
-    return is_emoji_only(text) or is_generic_praise(text)
+    return is_emoji_only(text) or is_generic_praise(text) or is_bot_like_comment(text)
 
 
 def filter_comments(comments):

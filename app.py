@@ -25,7 +25,12 @@ load_dotenv()
 import streamlit as st
 
 from src import data_loaders, database, demographics, exporter, filters, metrics, scoring, scraper
-from src.gemini_analyzer import RealGeminiClient, analyze_comments
+from src.gemini_analyzer import (
+    ADERENCIA_INDICADOR_LABELS,
+    RealGeminiClient,
+    analyze_comments,
+    summarize_brand_suitability,
+)
 
 st.set_page_config(page_title="métricaDODÔ", page_icon="📊", layout="wide")
 
@@ -287,8 +292,10 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
             qualified_texts = [c.get("texto", "") for c in qualified_comments]
             gemini_result = analyze_comments(qualified_texts, gemini_client)
             gemini_items = gemini_result["items"]
+            parecer_comercial = summarize_brand_suitability(gemini_items, pod_index=pod_result["pod_index"])
         else:
             gemini_items = []
+            parecer_comercial = None
 
         state["etapa"] = "relatorio"
         state["progresso"] = PIPELINE_STEPS["relatorio"][1]
@@ -313,6 +320,7 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
                 "total": total_comentarios,
                 "qualificados": len(qualified_comments),
                 "gemini_items": gemini_items,
+                "parecer_comercial": parecer_comercial,
             },
         }
 
@@ -337,6 +345,10 @@ def _render_metric_cards(analysis):
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Score DODÔ (0-10)", f"{analysis['score_dodo']:.2f}")
     col2.metric("Taxa de engajamento", f"{analysis['engagement_rate'] * 100:.2f}%")
+    col2.caption(
+        "Referência de mercado (nano/micro-influenciadoras de moda e lifestyle): "
+        "engajamento saudável costuma ficar entre ~1,2% e 5%, dependendo do porte do perfil."
+    )
     col3.metric("Índice de pods", f"{analysis['antifraude']['pod_index'] * 100:.1f}%")
     col4.metric("Taxa de resposta da criadora", f"{analysis['antifraude']['taxa_resposta_criadora'] * 100:.1f}%")
 
@@ -382,13 +394,25 @@ def _render_publis_card(analysis):
     )
 
 
+def _render_parecer_comercial(parecer):
+    label = ADERENCIA_INDICADOR_LABELS.get(parecer["indicador"], parecer["indicador"])
+    st.markdown(f"**Parecer de aderência comercial (brand suitability):** {label}")
+    st.write(parecer["resumo"])
+    for alerta in parecer.get("alertas", []):
+        st.warning(alerta)
+
+
 def _render_comentarios_card(analysis, gemini_configurado):
     st.subheader("Comentários analisados")
     comentarios = analysis["comentarios_analisados"]
     st.write(f"Total coletado: **{comentarios['total']}** — Qualificados (não rasos): **{comentarios['qualificados']}**")
     if not gemini_configurado:
         st.caption(exporter.GEMINI_NAO_CONFIGURADO_MSG)
-    elif comentarios["gemini_items"]:
+        return
+    parecer = comentarios.get("parecer_comercial")
+    if parecer:
+        _render_parecer_comercial(parecer)
+    if comentarios["gemini_items"]:
         st.dataframe(comentarios["gemini_items"], use_container_width=True)
 
 
