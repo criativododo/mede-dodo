@@ -9,16 +9,23 @@ const BLOCK_PATTERN = /```google_drive_sync\n([\s\S]*?)```/;
 
 /**
  * Critério de relevância documental (item 2 do pedido de governança do /drive):
- * qualquer `.md` na raiz do projeto (documentação de arquitetura/produto — README,
- * PROGRESS, TIMELINE, DUMMY, FINDER-*, guias, specs avulsas etc., o que cada projeto
- * de fato tiver) mais as subpastas técnicas dedicadas — nunca código, build ou
- * segredos. Diretórios como `.venv/`, `dist/`, `node_modules/`, `__pycache__/`,
- * `data/` e `legado/` nem são percorridos: ficam de fora por não pertencerem a nenhuma
- * das listas abaixo. `CLAUDE.md` é o único `.md` de raiz explicitamente excluído — é
- * configuração do agente, não conhecimento de produto.
+ * qualquer `.md` de documentação de arquitetura/produto — README, PROGRESS, TIMELINE,
+ * DUMMY, FINDER-*, guias, specs avulsas etc., o que cada projeto de fato tiver — mais
+ * as subpastas técnicas dedicadas (`specs/`, `decisions/`, `issues/`). Cada projeto
+ * deste ecossistema guarda essa documentação de um jeito: alguns na raiz
+ * (`mede-dodo`: `specs/`, `decisions/` na raiz), outros achatados sob `docs/`
+ * (`dita-dodo`: `docs/DUMMY.md`, `docs/specs/`, `docs/decisions/`). Por isso o motor
+ * procura em ambos os lugares — raiz do projeto e um nível dentro de `docs/` — e
+ * sempre espelha com o nome canônico (`specs/`, `decisions/`, `issues/`, e `.md`
+ * soltos na raiz do espelho), nunca replicando o prefixo `docs/` no destino: é a
+ * mesma pasta lógica, só a origem que difere. Nunca código, build ou segredos.
+ * Diretórios como `.venv/`, `dist/`, `node_modules/`, `__pycache__/`, `data/`,
+ * `legado/` e `docs/legado/` nem são percorridos — ficam de fora por não pertencerem
+ * a nenhuma das listas abaixo. `CLAUDE.md` é o único `.md` de raiz explicitamente
+ * excluído — é configuração do agente, não conhecimento de produto.
  */
 const ROOT_MD_EXCLUDE = new Set(['CLAUDE.md']);
-const DOC_DIRECTORIES = ['specs', 'decisions', 'docs/issues'];
+const DOC_SUBDIRS = ['specs', 'decisions', 'issues'];
 
 function listMarkdownFilesRecursive(absoluteDir, relativeDir) {
   if (!existsSync(absoluteDir)) return [];
@@ -34,40 +41,70 @@ function listMarkdownFilesRecursive(absoluteDir, relativeDir) {
   return results;
 }
 
-/** Enumera, a partir da raiz do projeto, apenas os documentos elegíveis para o espelho do Drive. */
+/**
+ * Enumera, a partir da raiz do projeto, os documentos elegíveis para o espelho do
+ * Drive. Cada item é `{ source, dest }`: `source` é o caminho real (relativo à raiz
+ * do projeto) de onde ler o conteúdo; `dest` é o caminho canônico (relativo à raiz do
+ * espelho) para onde gravar — sempre sem o prefixo `docs/`. Em empate de `dest` (o
+ * mesmo documento existindo tanto na raiz quanto sob `docs/`), a raiz do projeto tem
+ * precedência.
+ */
 export function planDriveSync(root) {
-  const files = [];
+  const entries = [];
+  const seenDest = new Set();
+  const addEntry = (source, dest) => {
+    if (seenDest.has(dest)) return;
+    seenDest.add(dest);
+    entries.push({ source, dest });
+  };
+
   for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith('.md') && !ROOT_MD_EXCLUDE.has(entry.name)) files.push(entry.name);
+    if (entry.isFile() && entry.name.endsWith('.md') && !ROOT_MD_EXCLUDE.has(entry.name)) {
+      addEntry(entry.name, entry.name);
+    }
   }
-  for (const dir of DOC_DIRECTORIES) {
-    files.push(...listMarkdownFilesRecursive(join(root, dir), dir));
+
+  const docsDir = join(root, 'docs');
+  if (existsSync(docsDir)) {
+    for (const entry of readdirSync(docsDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.md')) addEntry(`docs/${entry.name}`, entry.name);
+    }
   }
-  return files.sort();
+
+  for (const name of DOC_SUBDIRS) {
+    for (const [candidateRoot, prefix] of [[join(root, name), ''], [join(root, 'docs', name), 'docs/']]) {
+      for (const relPath of listMarkdownFilesRecursive(candidateRoot, name)) {
+        addEntry(`${prefix}${relPath}`, relPath);
+      }
+    }
+  }
+
+  return entries.sort((a, b) => a.dest.localeCompare(b.dest));
 }
 
 /**
- * Cópia idempotente (item 3 do pedido): compara o sha-256 de cada arquivo elegível com o
- * manifesto da sincronização anterior e só grava no Drive o que é novo ou mudou. Nunca
- * remove do Drive um arquivo que não tem mais correspondente local — o espelho só cresce
- * ou atualiza, para não apagar por engano algo que outra pessoa tenha colocado lá.
+ * Cópia idempotente (item 3 do pedido): compara o sha-256 de cada `source` elegível
+ * com o manifesto da sincronização anterior (indexado por `dest`) e só grava no Drive
+ * o que é novo ou mudou. Nunca remove do Drive um arquivo que não tem mais
+ * correspondente local — o espelho só cresce ou atualiza, para não apagar por engano
+ * algo que outra pessoa tenha colocado lá.
  */
-export function syncDriveFiles({ root, destFolder, files, previousManifest = {} }) {
+export function syncDriveFiles({ root, destFolder, entries, previousManifest = {} }) {
   const manifest = {};
   const synced = [];
   const skipped = [];
-  for (const relPath of files) {
-    const content = readFileSync(join(root, relPath));
+  for (const { source, dest } of entries) {
+    const content = readFileSync(join(root, source));
     const hash = createHash('sha256').update(content).digest('hex');
-    manifest[relPath] = hash;
-    const destPath = join(destFolder, relPath);
-    if (previousManifest[relPath] === hash && existsSync(destPath)) {
-      skipped.push(relPath);
+    manifest[dest] = hash;
+    const destPath = join(destFolder, dest);
+    if (previousManifest[dest] === hash && existsSync(destPath)) {
+      skipped.push(dest);
       continue;
     }
     mkdirSync(dirname(destPath), { recursive: true });
     writeFileSync(destPath, content);
-    synced.push(relPath);
+    synced.push(dest);
   }
   return { manifest, synced, skipped };
 }

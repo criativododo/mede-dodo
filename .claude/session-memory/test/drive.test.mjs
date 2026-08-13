@@ -134,11 +134,58 @@ test('planDriveSync: qualquer .md de raiz entra (nomenclatura livre por projeto)
     mkdirSync(join(dir, 'legado'), { recursive: true });
     writeFileSync(join(dir, 'legado/antigo.md'), '# não deve entrar');
 
-    const files = planDriveSync(dir);
-    assert.deepEqual(files, [
-      'DUMMY.md', 'FINDER-0001.md', 'GUIA-PROMPTS-NOTEBOOKLM.md', 'README.md',
-      'decisions/ADR-001.md', 'docs/issues/ISSUE-0001.md', 'specs/SPEC-001.md',
+    const entries = planDriveSync(dir);
+    assert.deepEqual(entries, [
+      { source: 'decisions/ADR-001.md', dest: 'decisions/ADR-001.md' },
+      { source: 'DUMMY.md', dest: 'DUMMY.md' },
+      { source: 'FINDER-0001.md', dest: 'FINDER-0001.md' },
+      { source: 'GUIA-PROMPTS-NOTEBOOKLM.md', dest: 'GUIA-PROMPTS-NOTEBOOKLM.md' },
+      { source: 'docs/issues/ISSUE-0001.md', dest: 'issues/ISSUE-0001.md' },
+      { source: 'README.md', dest: 'README.md' },
+      { source: 'specs/SPEC-001.md', dest: 'specs/SPEC-001.md' },
     ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('planDriveSync: projeto que guarda tudo achatado sob docs/ (convenção do dita-dodo) é totalmente coberto', () => {
+  const dir = tempDirectory();
+  try {
+    mkdirSync(join(dir, 'docs/specs'), { recursive: true });
+    mkdirSync(join(dir, 'docs/decisions'), { recursive: true });
+    mkdirSync(join(dir, 'docs/legado'), { recursive: true });
+    writeFileSync(join(dir, 'PROGRESS.md'), '# progress — solto na raiz, como no dita-dodo real');
+    writeFileSync(join(dir, 'docs/DUMMY.md'), '# dummy achatado');
+    writeFileSync(join(dir, 'docs/TIMELINE.md'), '# timeline achatado');
+    writeFileSync(join(dir, 'docs/ISSUE-001.md'), '# issue solta em docs/, sem subpasta issues/');
+    writeFileSync(join(dir, 'docs/specs/001-smart-recorder.md'), '# spec aninhada');
+    writeFileSync(join(dir, 'docs/decisions/ADR-001.md'), '# adr aninhado');
+    writeFileSync(join(dir, 'docs/legado/antigo.md'), '# não deve entrar — legado é sempre ignorado');
+
+    const entries = planDriveSync(dir);
+    assert.deepEqual(entries, [
+      { source: 'docs/decisions/ADR-001.md', dest: 'decisions/ADR-001.md' },
+      { source: 'docs/DUMMY.md', dest: 'DUMMY.md' },
+      { source: 'docs/ISSUE-001.md', dest: 'ISSUE-001.md' },
+      { source: 'PROGRESS.md', dest: 'PROGRESS.md' },
+      { source: 'docs/specs/001-smart-recorder.md', dest: 'specs/001-smart-recorder.md' },
+      { source: 'docs/TIMELINE.md', dest: 'TIMELINE.md' },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('planDriveSync: em empate de dest entre raiz e docs/, a raiz do projeto tem precedência', () => {
+  const dir = tempDirectory();
+  try {
+    mkdirSync(join(dir, 'docs'), { recursive: true });
+    writeFileSync(join(dir, 'DUMMY.md'), 'versão da raiz — deve vencer');
+    writeFileSync(join(dir, 'docs/DUMMY.md'), 'versão em docs/ — deve ser ignorada');
+
+    const entries = planDriveSync(dir);
+    assert.deepEqual(entries, [{ source: 'DUMMY.md', dest: 'DUMMY.md' }]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -150,21 +197,40 @@ test('syncDriveFiles: só copia arquivos novos/alterados (idempotência via sha-
   try {
     writeFileSync(join(root, 'README.md'), 'v1');
     writeFileSync(join(dest, 'ORFAO.md'), 'preservar');
+    const entries = [{ source: 'README.md', dest: 'README.md' }];
 
-    const first = syncDriveFiles({ root, destFolder: dest, files: ['README.md'], previousManifest: {} });
+    const first = syncDriveFiles({ root, destFolder: dest, entries, previousManifest: {} });
     assert.deepEqual(first.synced, ['README.md']);
     assert.deepEqual(first.skipped, []);
     assert.equal(readFileSync(join(dest, 'README.md'), 'utf8'), 'v1');
     assert.equal(existsSync(join(dest, 'ORFAO.md')), true, 'nunca deleta o que não tem correspondente local');
 
-    const second = syncDriveFiles({ root, destFolder: dest, files: ['README.md'], previousManifest: first.manifest });
+    const second = syncDriveFiles({ root, destFolder: dest, entries, previousManifest: first.manifest });
     assert.deepEqual(second.synced, [], 'sem mudança de conteúdo, não regrava');
     assert.deepEqual(second.skipped, ['README.md']);
 
     writeFileSync(join(root, 'README.md'), 'v2');
-    const third = syncDriveFiles({ root, destFolder: dest, files: ['README.md'], previousManifest: second.manifest });
+    const third = syncDriveFiles({ root, destFolder: dest, entries, previousManifest: second.manifest });
     assert.deepEqual(third.synced, ['README.md'], 'conteúdo mudou — hash diferente, regrava');
     assert.equal(readFileSync(join(dest, 'README.md'), 'utf8'), 'v2');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dest, { recursive: true, force: true });
+  }
+});
+
+test('syncDriveFiles: lê do source real mas grava no dest canônico (achatamento de docs/)', () => {
+  const root = tempDirectory();
+  const dest = tempDirectory();
+  try {
+    mkdirSync(join(root, 'docs/specs'), { recursive: true });
+    writeFileSync(join(root, 'docs/specs/001.md'), '# spec aninhada em docs/');
+    const entries = [{ source: 'docs/specs/001.md', dest: 'specs/001.md' }];
+
+    const result = syncDriveFiles({ root, destFolder: dest, entries, previousManifest: {} });
+    assert.deepEqual(result.synced, ['specs/001.md']);
+    assert.equal(existsSync(join(dest, 'docs/specs/001.md')), false, 'destino nunca replica o prefixo docs/');
+    assert.equal(readFileSync(join(dest, 'specs/001.md'), 'utf8'), '# spec aninhada em docs/');
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(dest, { recursive: true, force: true });

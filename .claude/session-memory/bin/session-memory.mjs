@@ -261,8 +261,8 @@ function commandDrive(commandArgs) {
     if (!driveConfig) fail('Nenhum mapeamento google_drive_sync no CLAUDE.md deste projeto; nada a sincronizar.');
     if (!existsSync(driveConfig.path)) fail(`Pasta do Drive não encontrada/montada: ${driveConfig.path}`);
     const previousState = readDriveSyncState(config.memoryPath, projectId);
-    const files = planDriveSync(root);
-    const { manifest, synced, skipped } = syncDriveFiles({ root, destFolder: driveConfig.path, files, previousManifest: previousState.files ?? {} });
+    const entries = planDriveSync(root);
+    const { manifest, synced, skipped } = syncDriveFiles({ root, destFolder: driveConfig.path, entries, previousManifest: previousState.files ?? {} });
     let markedAt;
     const result = withEphemeralWorktree(config, (worktree, memoryBranch) => publishSessionWorktree({
       worktree, remoteBranch: memoryBranch, message: 'docs(memory): registra sincronização automática do Drive',
@@ -272,7 +272,7 @@ function commandDrive(commandArgs) {
       project: projectId,
       driveFolder: driveConfig.path,
       notebookUrl: driveConfig.notebooklm_url ?? null,
-      totalEligible: files.length,
+      totalEligible: entries.length,
       synced,
       skipped,
       ...result,
