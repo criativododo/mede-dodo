@@ -184,7 +184,10 @@ def test_limpar_cache_button_clears_cached_profile_before_reanalyzing(monkeypatc
 def test_app_demo_pipeline_runs_end_to_end_without_gemini_api_key(monkeypatch):
     """Sem GEMINI_API_KEY no ambiente, o Modo Demonstração continua funcionando
     fim-a-fim: RealGeminiClient() levanta RuntimeError, app.py deve capturar isso
-    e seguir com gemini_client=None, sem exceção não tratada."""
+    e seguir sem chamar o Gemini real. Desde a decisão de produto de 13/08/2026,
+    o Modo Demonstração injeta DemoGeminiClient (fake, sem rede/custo) em vez de
+    None, então gemini_configurado passa a ser True — é isso que permite a seção
+    "Insights acionáveis de campanha" aparecer em demonstração sem chave real."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     at = AppTest.from_file(APP_PATH)
@@ -207,7 +210,48 @@ def test_app_demo_pipeline_runs_end_to_end_without_gemini_api_key(monkeypatch):
 
     assert not at.exception
     assert at.session_state["pipeline_state"]["status"] == "concluido"
-    assert at.session_state["pipeline_state"]["gemini_configurado"] is False
+    assert at.session_state["pipeline_state"]["gemini_configurado"] is True
+
+
+def test_app_demo_mode_renders_campaign_insights_section_without_gemini_api_key(monkeypatch):
+    """A seção "Insights acionáveis de campanha" (incluindo os cards Top 3 por
+    alcance/volume e Top 3 por qualidade/conversão, com PostScore_i canônico)
+    deve renderizar em tela no Modo Demonstração mesmo sem GEMINI_API_KEY —
+    condição de aceite da decisão de produto de 13/08/2026 de habilitar
+    DemoGeminiClient nesse modo."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    assert not at.exception
+
+    at.text_input(key="username_input").set_value(f"perfil_demo_insights_{uuid.uuid4().hex}")
+    at.toggle(key="demo_mode_toggle").set_value(True)
+    at.button[0].click().run()
+
+    max_reruns = 50
+    for _ in range(max_reruns):
+        assert not at.exception
+        status = at.session_state["pipeline_state"].get("status")
+        if status != "rodando":
+            break
+        at.run()
+
+    assert not at.exception
+    assert at.session_state["pipeline_state"]["status"] == "concluido"
+    assert at.session_state["pipeline_state"]["gemini_configurado"] is True
+
+    subheader_values = [s.value for s in at.subheader]
+    assert "Insights acionáveis de campanha" in subheader_values
+
+    markdown_values = [m.value for m in at.markdown]
+    assert any("Top 3 por alcance/volume" in v for v in markdown_values)
+    assert any("Top 3 por qualidade/conversão" in v for v in markdown_values)
+
+    campaign_insights = at.session_state["pipeline_state"]["analysis"]["campaign_insights"]
+    assert campaign_insights is not None
+    assert len(campaign_insights["top_3_by_quality"]) <= 3
+    assert all(0.0 <= post["post_score"] <= 1.0 for post in campaign_insights["top_3_by_quality"])
 
 
 def test_app_renders_new_audience_metric_cards_when_gemini_configured(monkeypatch):

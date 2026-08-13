@@ -520,7 +520,7 @@ def test_build_brand_suitability_verdict_with_no_items_returns_sem_dados():
     assert result["indicador"] == "sem_dados"
 
 
-def test_build_campaign_insights_bundles_all_five_fields():
+def test_build_campaign_insights_bundles_all_six_fields():
     items = [
         {
             "intencao_compra": "alta",
@@ -544,6 +544,7 @@ def test_build_campaign_insights_bundles_all_five_fields():
         "qualitative_engagement_rate",
         "purchase_intent_index",
         "top_3_content_ranking",
+        "top_3_by_quality",
         "top_3_thematic_pillars",
         "brand_suitability_verdict",
     }
@@ -552,6 +553,114 @@ def test_build_campaign_insights_bundles_all_five_fields():
     assert result["top_3_content_ranking"][0]["post_id"] == "a"
     assert result["top_3_thematic_pillars"][0]["pilar"] in {"moda_vestuario", "beleza_autocuidado"}
     assert "veredito" in result["brand_suitability_verdict"]
+    # Sem qualified_comments/followers_count, top_3_by_quality ainda existe
+    # (degradação graciosa): ER_i e os componentes por comentário ficam em 0
+    # (sem contexto de post), Sentiment_i cai no ponto neutro (0.5) por falta
+    # de dado — post_score = 0.5*0.15 para todo post.
+    assert len(result["top_3_by_quality"]) == 2
+    assert all(round(post["post_score"], 4) == round(0.5 * 0.15, 4) for post in result["top_3_by_quality"])
+
+
+def test_group_items_by_post_matches_by_exact_comment_text():
+    qualified_comments = [
+        {"texto": "Qual o preço?", "post_id": "post_a"},
+        {"texto": "Amei o look!", "post_id": "post_a"},
+        {"texto": "Tem para entrega?", "post_id": "post_b"},
+    ]
+    items = [
+        {"comentario": "Tem para entrega?", "categoria_sentimento": "interesse_comercial"},
+        {"comentario": "Qual o preço?", "categoria_sentimento": "interesse_comercial"},
+        {"comentario": "texto que não bate com nada", "categoria_sentimento": "spam_ruido"},
+    ]
+
+    result = gemini_analyzer.group_items_by_post(items, qualified_comments)
+
+    assert {item["comentario"] for item in result["post_a"]} == {"Qual o preço?"}
+    assert {item["comentario"] for item in result["post_b"]} == {"Tem para entrega?"}
+    assert "post_c" not in result
+
+
+def test_group_items_by_post_distributes_duplicate_texts_in_order():
+    qualified_comments = [
+        {"texto": "Amei!", "post_id": "post_a"},
+        {"texto": "Amei!", "post_id": "post_b"},
+    ]
+    items = [
+        {"comentario": "Amei!", "categoria_sentimento": "validacao_pessoal"},
+        {"comentario": "Amei!", "categoria_sentimento": "validacao_pessoal"},
+    ]
+
+    result = gemini_analyzer.group_items_by_post(items, qualified_comments)
+
+    assert len(result["post_a"]) == 1
+    assert len(result["post_b"]) == 1
+
+
+def test_calc_post_score_clamped_between_zero_and_one():
+    # Post perfeito: ER no teto, sem spam, todo mundo com sinal de compra e positivo.
+    post_items_otimo = [
+        {"categoria_sentimento": "interesse_comercial", "sinais_compra": ["preco"]},
+        {"categoria_sentimento": "interesse_comercial", "sinais_compra": ["tamanho"]},
+    ]
+    score_otimo = gemini_analyzer.calc_post_score(
+        post_items_otimo, likes_count=900, comments_count=100, followers_count=1000
+    )
+    assert score_otimo == 1.0
+
+    # Post péssimo: só spam e dúvida/crítica (risco de marca), zero engajamento.
+    post_items_ruim = [
+        {"categoria_sentimento": "spam_ruido", "sinais_compra": []},
+        {"categoria_sentimento": "duvida_critica", "sinais_compra": []},
+    ]
+    score_ruim = gemini_analyzer.calc_post_score(
+        post_items_ruim, likes_count=0, comments_count=0, followers_count=1000
+    )
+    assert score_ruim == 0.0
+
+
+def test_calc_post_score_with_no_matched_items_only_uses_engagement():
+    # ER no teto (8%), sem nenhum comentário classificado casado ao post.
+    score = gemini_analyzer.calc_post_score([], likes_count=80, comments_count=0, followers_count=1000)
+
+    # er_component=1.0*0.20 + quality=0*0.30 + intent=0*0.35 + sentiment=0.5*0.15 - risk=0
+    assert round(score, 4) == round(1.0 * 0.20 + 0.5 * 0.15, 4)
+
+
+def test_rank_top_content_by_quality_orders_by_post_score():
+    items_by_post = {
+        "alto_score": [{"categoria_sentimento": "interesse_comercial", "sinais_compra": ["preco"]}],
+        "baixo_score": [{"categoria_sentimento": "spam_ruido", "sinais_compra": []}],
+    }
+    posts = [
+        {"post_id": "baixo_score", "likes_count": 0, "comments_count": 0},
+        {"post_id": "alto_score", "likes_count": 500, "comments_count": 500},
+    ]
+
+    result = gemini_analyzer.rank_top_content_by_quality(posts, items_by_post, followers_count=1000, top_n=2)
+
+    assert [post["post_id"] for post in result] == ["alto_score", "baixo_score"]
+    assert result[0]["post_score"] > result[1]["post_score"]
+
+
+def test_build_campaign_insights_top_3_by_quality_uses_qualified_comments_and_followers():
+    qualified_comments = [
+        {"texto": "Qual o preço?", "post_id": "a"},
+        {"texto": "kkkk", "post_id": "b"},
+    ]
+    items = [
+        {"comentario": "Qual o preço?", "categoria_sentimento": "interesse_comercial", "sinais_compra": ["preco"]},
+        {"comentario": "kkkk", "categoria_sentimento": "spam_ruido", "sinais_compra": []},
+    ]
+    posts = [
+        {"post_id": "a", "likes_count": 10, "comments_count": 50},
+        {"post_id": "b", "likes_count": 1000, "comments_count": 1},
+    ]
+
+    result = gemini_analyzer.build_campaign_insights(
+        items, posts=posts, qualified_comments=qualified_comments, followers_count=10000, pod_index=0.1
+    )
+
+    assert result["top_3_by_quality"][0]["post_id"] == "a"
 
 
 def test_real_gemini_client_requests_structured_json_response(monkeypatch):

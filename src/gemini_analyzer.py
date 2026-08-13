@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from collections import Counter
+from collections import Counter, deque
 
 from dotenv import load_dotenv
 
@@ -349,6 +349,122 @@ def rank_top_content(posts, top_n=3):
     return ranked[:top_n]
 
 
+# PostScore canônico (ISSUE-001 §5.9) — pesos definidos por quem conduz o
+# produto em 13/08/2026, orientados a conversão/qualidade de influência.
+POST_SCORE_WEIGHTS = {"er": 0.20, "quality": 0.30, "intent": 0.35, "sentiment": 0.15}
+POST_SCORE_ER_BENCHMARK = 0.08  # ER_i satura em 1.0 ao atingir/superar 8% (ISSUE-001 §4.2)
+POST_SCORE_RISK_SPAM_PESO = 0.50
+POST_SCORE_RISK_POLEMICA_PESO = 0.50
+
+# categoria_sentimento não tem valência positivo/negativo/neutro nativa (o
+# schema do Gemini classifica por foco de intenção, não por sentimento —
+# ISSUE-001 §5.8 pede um NSS de verdade). Em vez de acrescentar um 7º campo
+# ao prompt só para o PostScore, reaproveitamos a categoria já classificada
+# como proxy de valência: interesse comercial e validação pessoal contam
+# como positivos, dúvida/crítica como negativo, spam/ruído fica fora do
+# denominador (mesma regra do NSS canônico). Documentado aqui para não virar
+# "mágica" na leitura de calc_post_score.
+_SENTIMENT_VALENCE_POSITIVA = {"interesse_comercial", "validacao_pessoal"}
+_SENTIMENT_VALENCE_NEGATIVA = {"duvida_critica"}
+
+
+def group_items_by_post(items, qualified_comments):
+    """Associa cada item classificado pelo Gemini ao post_id do comentário de
+    origem, casando por texto exato — o prompt instrui o Gemini a ecoar
+    'comentario' verbatim, então esse é o único vínculo disponível sem exigir
+    um campo novo no schema ou uma chamada extra de API. `qualified_comments`
+    é a lista de dicts (com 'texto' e 'post_id') enviada ao Gemini, na mesma
+    ordem/forma usada para montar os textos do prompt.
+
+    Comentários com texto idêntico em posts diferentes são distribuídos em
+    ordem de chegada (fila por texto) — atribuição aproximada nesse caso raro,
+    mas nunca inventa post_id para um item sem correspondência real."""
+    filas_por_texto = {}
+    for comentario in qualified_comments:
+        filas_por_texto.setdefault(comentario.get("texto", ""), deque()).append(comentario.get("post_id"))
+
+    agrupado = {}
+    for item in items:
+        fila = filas_por_texto.get(item.get("comentario", ""))
+        if not fila:
+            continue
+        post_id = fila.popleft()
+        agrupado.setdefault(post_id, []).append(item)
+    return agrupado
+
+
+def calc_post_score(post_items, likes_count=0, comments_count=0, followers_count=0):
+    """PostScore_i canônico (ISSUE-001 §5.9), clampado em [0.0, 1.0]:
+
+    PostScore_i = ER_i*0.20 + Quality_i*0.30 + Intent_i*0.35 + Sentiment_i*0.15 - RiskPenalty_i
+
+    - ER_i: engajamento do post (likes+comments/seguidores) normalizado pelo
+      benchmark de 8% (satura em 1.0).
+    - Quality_i: proporção de comentários do post que não são spam/ruído.
+    - Intent_i: proporção de comentários do post com algum sinal de compra
+      (sinais_compra não vazio — preço, tamanho, onde comprar, estoque etc.).
+    - Sentiment_i: NSS do post normalizado para [0.0, 1.0] via (NSS+1)/2.
+    - RiskPenalty_i: 0.5*taxa_spam_do_post + 0.5 se houver ao menos um
+      comentário 'duvida_critica' no post (proxy de menção a polêmica/risco
+      de marca — não há campo dedicado no schema atual)."""
+    engajamento_post = (likes_count + comments_count) / followers_count if followers_count else 0.0
+    er_component = min(engajamento_post / POST_SCORE_ER_BENCHMARK, 1.0)
+
+    total = len(post_items)
+    if total == 0:
+        quality_component = 0.0
+        intent_component = 0.0
+        sentiment_component = 0.5  # sem dados -> ponto neutro do NSS, não "muito negativo"
+        risk_penalty = 0.0
+    else:
+        spam_share = sum(1 for item in post_items if item.get("categoria_sentimento") == "spam_ruido") / total
+        quality_component = 1 - spam_share
+        intent_component = sum(1 for item in post_items if item.get("sinais_compra")) / total
+
+        positivos = sum(
+            1 for item in post_items if item.get("categoria_sentimento") in _SENTIMENT_VALENCE_POSITIVA
+        )
+        negativos = sum(
+            1 for item in post_items if item.get("categoria_sentimento") in _SENTIMENT_VALENCE_NEGATIVA
+        )
+        qualificados_sentimento = positivos + negativos
+        nss = (positivos - negativos) / qualificados_sentimento if qualificados_sentimento else 0.0
+        sentiment_component = (nss + 1) / 2
+
+        tem_polemica = any(item.get("categoria_sentimento") == "duvida_critica" for item in post_items)
+        risk_penalty = POST_SCORE_RISK_SPAM_PESO * spam_share + (
+            POST_SCORE_RISK_POLEMICA_PESO if tem_polemica else 0.0
+        )
+
+    raw_score = (
+        er_component * POST_SCORE_WEIGHTS["er"]
+        + quality_component * POST_SCORE_WEIGHTS["quality"]
+        + intent_component * POST_SCORE_WEIGHTS["intent"]
+        + sentiment_component * POST_SCORE_WEIGHTS["sentiment"]
+        - risk_penalty
+    )
+    return max(0.0, min(1.0, raw_score))
+
+
+def rank_top_content_by_quality(posts, items_by_post, followers_count=0, top_n=3):
+    """top3_by_quality (ISSUE-001 §5.9): ranking dos posts pelo PostScore_i
+    canônico, em vez do volume bruto de comments/likes usado por rank_top_content."""
+    scored = [
+        {
+            **post,
+            "post_score": calc_post_score(
+                items_by_post.get(post.get("post_id"), []),
+                likes_count=post.get("likes_count") or 0,
+                comments_count=post.get("comments_count") or 0,
+                followers_count=followers_count,
+            ),
+        }
+        for post in posts
+    ]
+    scored.sort(key=lambda post: post["post_score"], reverse=True)
+    return scored[:top_n]
+
+
 def top_thematic_pillars(items, top_n=3):
     """Os `top_n` territórios de fala (ISSUE-001 §5.10) mais frequentes entre \
     os comentários classificados, com contagem e participação percentual."""
@@ -382,15 +498,23 @@ def build_brand_suitability_verdict(items, pod_index=None):
     }
 
 
-def build_campaign_insights(items, posts=None, pod_index=None):
+def build_campaign_insights(items, posts=None, qualified_comments=None, followers_count=0, pod_index=None):
     """Agrega os indicadores acionáveis de campanha (ISSUE-001 §4.1/§5.9/§5.10) \
     a partir dos itens já classificados pelo Gemini e, opcionalmente, dos posts \
     da janela coletada — sem nenhuma chamada extra de API (RNF-03: teto de 2 \
-    requisições Gemini por perfil)."""
+    requisições Gemini por perfil).
+
+    `qualified_comments` (dicts com 'texto'/'post_id', mesma lista enviada ao \
+    Gemini) e `followers_count` são opcionais e só afetam top_3_by_quality: \
+    sem eles, o PostScore_i cai para os componentes calculáveis sem contexto \
+    de post (ER_i=0, listas de item por post vazias)."""
+    posts = posts or []
+    items_by_post = group_items_by_post(items, qualified_comments or [])
     return {
         "qualitative_engagement_rate": calc_qualitative_engagement_rate(items),
         "purchase_intent_index": calc_purchase_intent_index(items),
-        "top_3_content_ranking": rank_top_content(posts or [], top_n=3),
+        "top_3_content_ranking": rank_top_content(posts, top_n=3),
+        "top_3_by_quality": rank_top_content_by_quality(posts, items_by_post, followers_count=followers_count, top_n=3),
         "top_3_thematic_pillars": top_thematic_pillars(items, top_n=3),
         "brand_suitability_verdict": build_brand_suitability_verdict(items, pod_index=pod_index),
     }

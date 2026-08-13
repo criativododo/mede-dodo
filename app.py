@@ -11,6 +11,7 @@ thread principal apenas faz polling/rerun para atualizar a barra de progresso,
 nunca bloqueia esperando a raspagem terminar.
 """
 
+import json
 import os
 import random
 import re
@@ -27,6 +28,10 @@ import streamlit as st
 from src import data_loaders, database, demographics, exporter, filters, metrics, scoring, scraper
 from src.gemini_analyzer import (
     ADERENCIA_INDICADOR_LABELS,
+    INTENCAO_COMPRA_NIVEIS,
+    PURCHASE_SIGNAL_TYPES,
+    SENTIMENT_CATEGORIES,
+    THEMATIC_PILLARS,
     RealGeminiClient,
     analyze_comments,
     build_campaign_insights,
@@ -143,6 +148,45 @@ def demo_fetch_fn(username, cookies=None):
     }
 
 
+class _DemoGeminiResponse:
+    def __init__(self, text):
+        self.text = text
+
+
+def _classify_demo_comment(texto):
+    """Classificação determinística (seed = texto do comentário) no mesmo
+    formato exigido pelo PROMPT_TEMPLATE do Gemini real — permite que
+    DemoGeminiClient produza itens plausíveis sem rede nem chave de API."""
+    rng = random.Random(texto)
+    categoria = rng.choice(sorted(SENTIMENT_CATEGORIES))
+    sinais_compra = (
+        rng.sample(sorted(PURCHASE_SIGNAL_TYPES), k=rng.randint(0, 2)) if categoria != "spam_ruido" else []
+    )
+    return {
+        "comentario": texto,
+        "intencao_compra": rng.choice(INTENCAO_COMPRA_NIVEIS),
+        "faixa_etaria_estimada": rng.choice(["18-24", "25-34", "35+"]),
+        "categoria_sentimento": categoria,
+        "sinais_compra": sinais_compra,
+        "pilar_tematico": rng.choice(sorted(THEMATIC_PILLARS)),
+    }
+
+
+class DemoGeminiClient:
+    """Client Gemini fake do Modo Demonstração — mesmo contrato duck-typed
+    (generate_content -> objeto com .text) usado por RealGeminiClient, sem
+    rede nem custo. Extrai os comentários do prompt (mesma formatação de
+    build_batch_prompt: uma linha "- <texto>" por comentário) e devolve uma
+    classificação determinística por comentário, para que a seção "Insights
+    acionáveis de campanha" seja demonstrável de ponta a ponta sem
+    GEMINI_API_KEY (decisão de produto de 13/08/2026)."""
+
+    def generate_content(self, prompt):
+        comentarios = [linha[2:] for linha in prompt.splitlines() if linha.startswith("- ")]
+        itens = [_classify_demo_comment(texto) for texto in comentarios]
+        return _DemoGeminiResponse(json.dumps(itens))
+
+
 def _genero_percentuais(contagem):
     total = sum(contagem.values())
     if total == 0:
@@ -242,7 +286,13 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
                     "caption": (post.get("raw") or {}).get("caption"),
                 }
             )
-            all_comments_flat.extend(raw_comments)
+            # post_id vai junto de cada comentário (não muda nenhum uso existente
+            # de all_comments_flat) para permitir, mais adiante, recompor qual
+            # comentário classificado pelo Gemini pertence a qual post — sem isso
+            # o PostScore_i canônico (ISSUE-001 §5.9) não teria como calcular
+            # componentes por post, já que a classificação roda sobre o pool
+            # global de comentários qualificados do perfil.
+            all_comments_flat.extend({**c, "post_id": post.get("post_id")} for c in raw_comments)
 
         qualified_comments = [c for c in all_comments_flat if not filters.is_shallow_comment(c.get("texto", ""))]
         total_comentarios = len(all_comments_flat)
@@ -308,7 +358,11 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
             gemini_items = gemini_result["items"]
             parecer_comercial = summarize_brand_suitability(gemini_items, pod_index=pod_result["pod_index"])
             campaign_insights = build_campaign_insights(
-                gemini_items, posts=content_posts, pod_index=pod_result["pod_index"]
+                gemini_items,
+                posts=content_posts,
+                qualified_comments=qualified_comments,
+                followers_count=followers_count,
+                pod_index=pod_result["pod_index"],
             )
         else:
             gemini_items = []
@@ -501,7 +555,7 @@ def _render_campaign_insights_metric_cards(campaign_insights):
 
 
 def _render_top_content_card(campaign_insights):
-    st.markdown("**Top 3 conteúdos mais engajados**")
+    st.markdown("**Top 3 por alcance/volume**")
     top_content = campaign_insights.get("top_3_content_ranking") or []
     if not top_content:
         st.caption("Sem posts na janela selecionada para ranquear.")
@@ -514,6 +568,26 @@ def _render_top_content_card(campaign_insights):
                 "curtidas": item.get("likes_count", 0),
             }
             for item in top_content
+        ]
+    )
+
+
+def _render_top_content_by_quality_card(campaign_insights):
+    st.markdown("**Top 3 por qualidade/conversão**")
+    st.caption("Ranqueado pelo PostScore_i canônico (ISSUE-001 §5.9): engajamento, qualidade do comentário, intenção de compra e sentimento, descontado risco de marca.")
+    top_quality = campaign_insights.get("top_3_by_quality") or []
+    if not top_quality:
+        st.caption("Sem posts na janela selecionada para ranquear.")
+        return
+    st.table(
+        [
+            {
+                "post": item.get("link") or item.get("post_id"),
+                "PostScore": f"{item.get('post_score', 0.0):.2f}",
+                "comentários": item.get("comments_count", 0),
+                "curtidas": item.get("likes_count", 0),
+            }
+            for item in top_quality
         ]
     )
 
@@ -550,6 +624,7 @@ def _render_campaign_insights_section(analysis, gemini_configurado):
     col_left, col_right = st.columns(2)
     with col_left:
         _render_top_content_card(campaign_insights)
+        _render_top_content_by_quality_card(campaign_insights)
         _render_brand_suitability_panel(campaign_insights)
     with col_right:
         _render_top_pilares_card(campaign_insights)
@@ -577,8 +652,13 @@ def _render_export_buttons(analysis):
 
 
 def _start_pipeline_thread(username, window_days, demo_mode):
-    gemini_client = None
-    if not demo_mode:
+    if demo_mode:
+        # Modo Demonstração simula o Gemini localmente (DemoGeminiClient) para
+        # que a seção "Insights acionáveis de campanha" seja demonstrável de
+        # ponta a ponta sem GEMINI_API_KEY nem qualquer chamada de rede.
+        gemini_client = DemoGeminiClient()
+    else:
+        gemini_client = None
         try:
             gemini_client = RealGeminiClient()
         except RuntimeError:
