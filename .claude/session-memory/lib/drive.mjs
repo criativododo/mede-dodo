@@ -9,13 +9,15 @@ const BLOCK_PATTERN = /```google_drive_sync\n([\s\S]*?)```/;
 
 /**
  * Critério de relevância documental (item 2 do pedido de governança do /drive):
- * lista positiva restrita a documentos de arquitetura/produto na raiz do projeto e a
- * subpastas de especificação — nunca código, build ou segredos. Diretórios como
- * `.venv/`, `dist/`, `node_modules/`, `__pycache__/`, `data/` e `legado/` nem são
- * percorridos: ficam de fora por não pertencerem a nenhuma das listas abaixo.
+ * qualquer `.md` na raiz do projeto (documentação de arquitetura/produto — README,
+ * PROGRESS, TIMELINE, DUMMY, FINDER-*, guias, specs avulsas etc., o que cada projeto
+ * de fato tiver) mais as subpastas técnicas dedicadas — nunca código, build ou
+ * segredos. Diretórios como `.venv/`, `dist/`, `node_modules/`, `__pycache__/`,
+ * `data/` e `legado/` nem são percorridos: ficam de fora por não pertencerem a nenhuma
+ * das listas abaixo. `CLAUDE.md` é o único `.md` de raiz explicitamente excluído — é
+ * configuração do agente, não conhecimento de produto.
  */
-const ROOT_DOC_FILES = ['README.md', 'DUMMY.md', 'PROGRESS.md', 'TIMELINE.md'];
-const ROOT_DOC_FILE_PATTERN = /^FINDER-.*\.md$/;
+const ROOT_MD_EXCLUDE = new Set(['CLAUDE.md']);
 const DOC_DIRECTORIES = ['specs', 'decisions', 'docs/issues'];
 
 function listMarkdownFilesRecursive(absoluteDir, relativeDir) {
@@ -35,11 +37,8 @@ function listMarkdownFilesRecursive(absoluteDir, relativeDir) {
 /** Enumera, a partir da raiz do projeto, apenas os documentos elegíveis para o espelho do Drive. */
 export function planDriveSync(root) {
   const files = [];
-  for (const name of ROOT_DOC_FILES) {
-    if (existsSync(join(root, name))) files.push(name);
-  }
   for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (entry.isFile() && ROOT_DOC_FILE_PATTERN.test(entry.name)) files.push(entry.name);
+    if (entry.isFile() && entry.name.endsWith('.md') && !ROOT_MD_EXCLUDE.has(entry.name)) files.push(entry.name);
   }
   for (const dir of DOC_DIRECTORIES) {
     files.push(...listMarkdownFilesRecursive(join(root, dir), dir));

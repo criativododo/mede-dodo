@@ -113,13 +113,15 @@ test('readDriveConfig: chaves extras do bloco (ex.: notebooklm_url) ficam dispon
   }
 });
 
-test('planDriveSync: seleciona só a lista positiva de documentos, ignorando código e build', () => {
+test('planDriveSync: qualquer .md de raiz entra (nomenclatura livre por projeto), CLAUDE.md fica de fora, código e build ficam de fora', () => {
   const dir = tempDirectory();
   try {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'README.md'), '# readme');
     writeFileSync(join(dir, 'DUMMY.md'), '# dummy');
     writeFileSync(join(dir, 'FINDER-0001.md'), '# finder');
+    writeFileSync(join(dir, 'GUIA-PROMPTS-NOTEBOOKLM.md'), '# guia — nome livre, não está em nenhuma lista fixa');
+    writeFileSync(join(dir, 'CLAUDE.md'), '# configuração do agente — nunca espelhada');
     writeFileSync(join(dir, 'app.py'), 'print(1)');
     mkdirSync(join(dir, 'specs'), { recursive: true });
     writeFileSync(join(dir, 'specs/SPEC-001.md'), '# spec');
@@ -134,7 +136,7 @@ test('planDriveSync: seleciona só a lista positiva de documentos, ignorando có
 
     const files = planDriveSync(dir);
     assert.deepEqual(files, [
-      'DUMMY.md', 'FINDER-0001.md', 'README.md',
+      'DUMMY.md', 'FINDER-0001.md', 'GUIA-PROMPTS-NOTEBOOKLM.md', 'README.md',
       'decisions/ADR-001.md', 'docs/issues/ISSUE-0001.md', 'specs/SPEC-001.md',
     ]);
   } finally {
