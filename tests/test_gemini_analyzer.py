@@ -411,6 +411,149 @@ def test_real_gemini_client_does_not_retry_non_retryable_api_error(monkeypatch):
     assert sleep_calls == []
 
 
+def test_prompt_template_requests_pilar_tematico_field():
+    prompt = gemini_analyzer.build_batch_prompt(["Qual o preço?"])
+
+    assert "pilar_tematico" in prompt
+    for pilar in gemini_analyzer.THEMATIC_PILLARS:
+        assert pilar in prompt
+
+
+def test_calc_qualitative_engagement_rate_with_no_items_returns_zero():
+    assert gemini_analyzer.calc_qualitative_engagement_rate([]) == 0.0
+
+
+def test_calc_qualitative_engagement_rate_weighs_commercial_and_critique_above_spam():
+    items = [
+        {"categoria_sentimento": "interesse_comercial"},
+        {"categoria_sentimento": "spam_ruido"},
+    ]
+
+    result = gemini_analyzer.calc_qualitative_engagement_rate(items)
+
+    # (3 + 0) / (2 * 3) * 100
+    assert result == 50.0
+
+
+def test_calc_purchase_intent_index_with_no_items_returns_zero():
+    assert gemini_analyzer.calc_purchase_intent_index([]) == 0.0
+
+
+def test_calc_purchase_intent_index_computes_weighted_score():
+    items = [
+        {"intencao_compra": "alta"},
+        {"intencao_compra": "media"},
+        {"intencao_compra": "nenhuma"},
+    ]
+
+    result = gemini_analyzer.calc_purchase_intent_index(items)
+
+    # (3 + 2 + 0) / (3 * 3) * 100
+    assert round(result, 2) == round(500 / 9, 2)
+
+
+def test_rank_top_content_weighs_comments_above_likes():
+    posts = [
+        {"post_id": "muitas_curtidas", "likes_count": 10000, "comments_count": 5},
+        {"post_id": "muitos_comentarios", "likes_count": 100, "comments_count": 500},
+        {"post_id": "mediano", "likes_count": 1000, "comments_count": 50},
+    ]
+
+    result = gemini_analyzer.rank_top_content(posts, top_n=3)
+
+    assert [post["post_id"] for post in result] == ["muitos_comentarios", "mediano", "muitas_curtidas"]
+
+
+def test_rank_top_content_respects_top_n():
+    posts = [
+        {"post_id": f"post_{i}", "likes_count": i, "comments_count": i}
+        for i in range(5)
+    ]
+
+    result = gemini_analyzer.rank_top_content(posts, top_n=3)
+
+    assert len(result) == 3
+    assert [post["post_id"] for post in result] == ["post_4", "post_3", "post_2"]
+
+
+def test_top_thematic_pillars_returns_empty_list_for_no_items():
+    assert gemini_analyzer.top_thematic_pillars([]) == []
+
+
+def test_top_thematic_pillars_ranks_by_frequency_and_ignores_unknown():
+    items = [
+        {"pilar_tematico": "moda_vestuario"},
+        {"pilar_tematico": "moda_vestuario"},
+        {"pilar_tematico": "beleza_autocuidado"},
+        {"pilar_tematico": "bem_estar_fitness"},
+        {"pilar_tematico": "algo_nao_mapeado"},
+        {},
+    ]
+
+    result = gemini_analyzer.top_thematic_pillars(items, top_n=3)
+
+    assert result[0]["pilar"] == "moda_vestuario"
+    assert result[0]["count"] == 2
+    assert result[0]["label"] == "Moda e vestuário"
+    assert len(result) == 3
+
+
+def test_build_brand_suitability_verdict_returns_veredito_and_justificativa():
+    items = [
+        {"intencao_compra": "alta", "categoria_sentimento": "interesse_comercial"},
+        {"intencao_compra": "alta", "categoria_sentimento": "interesse_comercial"},
+        {"intencao_compra": "alta", "categoria_sentimento": "interesse_comercial"},
+    ]
+
+    result = gemini_analyzer.build_brand_suitability_verdict(items, pod_index=0.05)
+
+    assert result["veredito"] == "Alto potencial de conversão"
+    assert "comercial" in result["justificativa"].lower()
+    assert result["indicador"] == "alto"
+    assert result["alertas"] == []
+
+
+def test_build_brand_suitability_verdict_with_no_items_returns_sem_dados():
+    result = gemini_analyzer.build_brand_suitability_verdict([])
+
+    assert result["veredito"] == "Sem dados suficientes para avaliar"
+    assert result["indicador"] == "sem_dados"
+
+
+def test_build_campaign_insights_bundles_all_five_fields():
+    items = [
+        {
+            "intencao_compra": "alta",
+            "categoria_sentimento": "interesse_comercial",
+            "pilar_tematico": "moda_vestuario",
+        },
+        {
+            "intencao_compra": "baixa",
+            "categoria_sentimento": "validacao_pessoal",
+            "pilar_tematico": "beleza_autocuidado",
+        },
+    ]
+    posts = [
+        {"post_id": "a", "likes_count": 10, "comments_count": 50},
+        {"post_id": "b", "likes_count": 1000, "comments_count": 1},
+    ]
+
+    result = gemini_analyzer.build_campaign_insights(items, posts=posts, pod_index=0.1)
+
+    assert set(result.keys()) == {
+        "qualitative_engagement_rate",
+        "purchase_intent_index",
+        "top_3_content_ranking",
+        "top_3_thematic_pillars",
+        "brand_suitability_verdict",
+    }
+    assert isinstance(result["qualitative_engagement_rate"], float)
+    assert isinstance(result["purchase_intent_index"], float)
+    assert result["top_3_content_ranking"][0]["post_id"] == "a"
+    assert result["top_3_thematic_pillars"][0]["pilar"] in {"moda_vestuario", "beleza_autocuidado"}
+    assert "veredito" in result["brand_suitability_verdict"]
+
+
 def test_real_gemini_client_requests_structured_json_response(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
 

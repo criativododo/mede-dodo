@@ -38,6 +38,32 @@ ADERENCIA_INDICADOR_LABELS = {
     "sem_dados": "Sem dados suficientes para avaliar",
 }
 
+# Taxonomia de territórios de fala (ISSUE-001 §5.10) — pilar_tematico é
+# enriquecimento opcional por comentário, no mesmo padrão de
+# categoria_sentimento/sinais_compra: nunca exigido para o item ser aceito.
+THEMATIC_PILLARS = {
+    "moda_vestuario",
+    "beleza_autocuidado",
+    "bem_estar_fitness",
+    "viagens_lifestyle",
+    "familia_maternidade",
+    "consumo_varejo",
+    "sustentabilidade_valores",
+    "conteudo_comercial",
+    "ruido_fora_escopo",
+}
+PILAR_TEMATICO_LABELS = {
+    "moda_vestuario": "Moda e vestuário",
+    "beleza_autocuidado": "Beleza e autocuidado",
+    "bem_estar_fitness": "Bem-estar e fitness",
+    "viagens_lifestyle": "Viagens e lifestyle",
+    "familia_maternidade": "Família e maternidade",
+    "consumo_varejo": "Consumo e varejo",
+    "sustentabilidade_valores": "Sustentabilidade e valores",
+    "conteudo_comercial": "Conteúdo comercial",
+    "ruido_fora_escopo": "Ruído/fora de escopo",
+}
+
 _RETRYABLE_ERROR_CODES = {429, 503}
 _RETRYABLE_MESSAGE_SIGNATURES = ("unavailable", "high demand")
 _RETRY_BACKOFF_SECONDS = (2, 4, 8)  # até 3 retries além da tentativa inicial
@@ -83,7 +109,8 @@ Responda APENAS com uma lista JSON, um objeto por comentário, no formato:
 "intencao_compra": "alta|media|baixa|nenhuma", \
 "faixa_etaria_estimada": "<faixa etária, ex.: 18-24, 25-34, 35+>", \
 "categoria_sentimento": "interesse_comercial|validacao_pessoal|duvida_critica|spam_ruido", \
-"sinais_compra": ["preco"|"tamanho"|"caimento"|"tecido"|"onde_comprar"|"estoque"|"depoimento_compra", ...]}}]
+"sinais_compra": ["preco"|"tamanho"|"caimento"|"tecido"|"onde_comprar"|"estoque"|"depoimento_compra", ...], \
+"pilar_tematico": "moda_vestuario|beleza_autocuidado|bem_estar_fitness|viagens_lifestyle|familia_maternidade|consumo_varejo|sustentabilidade_valores|conteudo_comercial|ruido_fora_escopo"}}]
 
 Critérios:
 - intencao_compra: "alta" para pergunta objetiva de compra (preço/tamanho/onde comprar) ou "vou \
@@ -98,6 +125,8 @@ quando não houver nenhum.
 - faixa_etaria_estimada: sempre estime uma faixa plausível (ex.: "18-24", "25-34", "35+") a partir \
 do estilo/vocabulário do comentário e do perfil típico da rede social — o campo é obrigatório e \
 nunca deve ficar vazio; na dúvida, escolha a faixa mais provável para o contexto observado.
+- pilar_tematico: classifique o território de fala do comentário em exatamente uma das opções \
+listadas acima; use "ruido_fora_escopo" apenas quando nenhum outro pilar se aplicar.
 
 Comentários:
 {comentarios}
@@ -270,4 +299,98 @@ def analyze_comments(comments, client, max_batch_size=DEFAULT_MAX_BATCH_SIZE, ma
         "items": items,
         "dropped": chunked["dropped"],
         "failed_batches": failed_batches,
+    }
+
+
+_INTENCAO_COMPRA_PESOS = {"nenhuma": 0, "baixa": 1, "media": 2, "alta": 3}
+_QUALITATIVE_ENGAGEMENT_PESOS = {
+    "interesse_comercial": 3,
+    "duvida_critica": 2,
+    "validacao_pessoal": 1,
+    "spam_ruido": 0,
+}
+
+
+def calc_qualitative_engagement_rate(items):
+    """Taxa de engajamento qualitativo (0-100): pondera cada comentário \
+    classificado pelo Gemini por categoria_sentimento (interesse comercial e \
+    dúvida/crítica pesam mais que validação pessoal ou spam), em vez de tratar \
+    todo comentário qualificado como equivalente."""
+    total = len(items)
+    if total == 0:
+        return 0.0
+    pontos = sum(_QUALITATIVE_ENGAGEMENT_PESOS.get(item.get("categoria_sentimento"), 0) for item in items)
+    maximo = total * max(_QUALITATIVE_ENGAGEMENT_PESOS.values())
+    return (pontos / maximo) * 100 if maximo else 0.0
+
+
+def calc_purchase_intent_index(items):
+    """Índice de intenção de compra (0-100) — PurchaseIntentScore de \
+    ISSUE-001 §5.7: média ponderada nenhuma=0/baixa=1/media=2/alta=3 sobre o \
+    máximo possível."""
+    total = len(items)
+    if total == 0:
+        return 0.0
+    pontos = sum(_INTENCAO_COMPRA_PESOS.get(item.get("intencao_compra"), 0) for item in items)
+    maximo = total * max(_INTENCAO_COMPRA_PESOS.values())
+    return (pontos / maximo) * 100 if maximo else 0.0
+
+
+def rank_top_content(posts, top_n=3):
+    """Ranking dos posts mais engajados da janela coletada, ponderando \
+    comentários acima de curtidas: comentário exige esforço do seguidor e é \
+    sinal de interação mais forte que curtida, então ordena primeiro por \
+    comments_count e usa likes_count só como critério de desempate."""
+    ranked = sorted(
+        posts,
+        key=lambda post: ((post.get("comments_count") or 0), (post.get("likes_count") or 0)),
+        reverse=True,
+    )
+    return ranked[:top_n]
+
+
+def top_thematic_pillars(items, top_n=3):
+    """Os `top_n` territórios de fala (ISSUE-001 §5.10) mais frequentes entre \
+    os comentários classificados, com contagem e participação percentual."""
+    total = len(items)
+    if total == 0:
+        return []
+    contagem = Counter(
+        item.get("pilar_tematico") for item in items if item.get("pilar_tematico") in THEMATIC_PILLARS
+    )
+    return [
+        {
+            "pilar": pilar,
+            "label": PILAR_TEMATICO_LABELS.get(pilar, pilar),
+            "count": count,
+            "pct": count / total,
+        }
+        for pilar, count in contagem.most_common(top_n)
+    ]
+
+
+def build_brand_suitability_verdict(items, pod_index=None):
+    """Veredito de aderência comercial (brand suitability): reaproveita \
+    summarize_brand_suitability (sem chamada extra de API) e reduz o \
+    resultado a veredito + justificativa para exibição direta em painel."""
+    parecer = summarize_brand_suitability(items, pod_index=pod_index)
+    return {
+        "veredito": ADERENCIA_INDICADOR_LABELS.get(parecer["indicador"], parecer["indicador"]),
+        "justificativa": parecer["resumo"],
+        "indicador": parecer["indicador"],
+        "alertas": parecer["alertas"],
+    }
+
+
+def build_campaign_insights(items, posts=None, pod_index=None):
+    """Agrega os indicadores acionáveis de campanha (ISSUE-001 §4.1/§5.9/§5.10) \
+    a partir dos itens já classificados pelo Gemini e, opcionalmente, dos posts \
+    da janela coletada — sem nenhuma chamada extra de API (RNF-03: teto de 2 \
+    requisições Gemini por perfil)."""
+    return {
+        "qualitative_engagement_rate": calc_qualitative_engagement_rate(items),
+        "purchase_intent_index": calc_purchase_intent_index(items),
+        "top_3_content_ranking": rank_top_content(posts or [], top_n=3),
+        "top_3_thematic_pillars": top_thematic_pillars(items, top_n=3),
+        "brand_suitability_verdict": build_brand_suitability_verdict(items, pod_index=pod_index),
     }

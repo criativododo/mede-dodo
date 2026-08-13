@@ -29,8 +29,12 @@ from src.gemini_analyzer import (
     ADERENCIA_INDICADOR_LABELS,
     RealGeminiClient,
     analyze_comments,
+    build_campaign_insights,
     summarize_brand_suitability,
 )
+
+BENCHMARK_ER_QUALITATIVO_MIN = 5.0
+BENCHMARK_ER_QUALITATIVO_MAX = 8.0
 
 st.set_page_config(page_title="métricaDODÔ", page_icon="📊", layout="wide")
 
@@ -220,6 +224,7 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
         all_comments_flat = []
         metrics_posts = []
         engagement_posts = []
+        content_posts = []
         for post in posts:
             raw_comments = (post.get("raw") or {}).get("comments", [])
             metrics_posts.append(
@@ -227,6 +232,15 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
             )
             engagement_posts.append(
                 {"likes_count": post.get("likes_count") or 0, "comments_count": post.get("comments_count") or 0}
+            )
+            content_posts.append(
+                {
+                    "post_id": post.get("post_id"),
+                    "likes_count": post.get("likes_count") or 0,
+                    "comments_count": post.get("comments_count") or 0,
+                    "link": (post.get("raw") or {}).get("shortcode"),
+                    "caption": (post.get("raw") or {}).get("caption"),
+                }
             )
             all_comments_flat.extend(raw_comments)
 
@@ -293,9 +307,13 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
             gemini_result = analyze_comments(qualified_texts, gemini_client)
             gemini_items = gemini_result["items"]
             parecer_comercial = summarize_brand_suitability(gemini_items, pod_index=pod_result["pod_index"])
+            campaign_insights = build_campaign_insights(
+                gemini_items, posts=content_posts, pod_index=pod_result["pod_index"]
+            )
         else:
             gemini_items = []
             parecer_comercial = None
+            campaign_insights = None
 
         state["etapa"] = "relatorio"
         state["progresso"] = PIPELINE_STEPS["relatorio"][1]
@@ -322,6 +340,7 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
                 "gemini_items": gemini_items,
                 "parecer_comercial": parecer_comercial,
             },
+            "campaign_insights": campaign_insights,
         }
 
         state["analysis"] = analysis
@@ -465,6 +484,77 @@ def _render_comentarios_card(analysis, gemini_configurado):
         st.dataframe(comentarios["gemini_items"], use_container_width=True)
 
 
+def _render_campaign_insights_metric_cards(campaign_insights):
+    st.subheader("Insights acionáveis de campanha")
+    col1, col2 = st.columns(2)
+    col1.metric(
+        "Taxa de engajamento qualitativo",
+        f"{campaign_insights['qualitative_engagement_rate']:.1f}%",
+    )
+    col1.caption(
+        f"Benchmark editorial nano/micro: ~{BENCHMARK_ER_QUALITATIVO_MIN:.0f}%–"
+        f"{BENCHMARK_ER_QUALITATIVO_MAX:.0f}% (ISSUE-001 §4.2). Pondera comentários por "
+        "categoria de sentimento, não é a taxa de engajamento bruta."
+    )
+    col2.metric("Índice de intenção de compra", f"{campaign_insights['purchase_intent_index']:.1f}%")
+    col2.caption("Média ponderada da intenção de compra classificada pelo Gemini nos comentários qualificados.")
+
+
+def _render_top_content_card(campaign_insights):
+    st.markdown("**Top 3 conteúdos mais engajados**")
+    top_content = campaign_insights.get("top_3_content_ranking") or []
+    if not top_content:
+        st.caption("Sem posts na janela selecionada para ranquear.")
+        return
+    st.table(
+        [
+            {
+                "post": item.get("link") or item.get("post_id"),
+                "comentários": item.get("comments_count", 0),
+                "curtidas": item.get("likes_count", 0),
+            }
+            for item in top_content
+        ]
+    )
+
+
+def _render_top_pilares_card(campaign_insights):
+    st.markdown("**Top 3 pilares temáticos**")
+    top_pilares = campaign_insights.get("top_3_thematic_pillars") or []
+    if not top_pilares:
+        st.caption("Sem pilares temáticos suficientes para ranquear nesta janela.")
+        return
+    st.table(
+        [
+            {"pilar": item["label"], "comentários": item["count"], "% dos comentários": f"{item['pct'] * 100:.1f}%"}
+            for item in top_pilares
+        ]
+    )
+
+
+def _render_brand_suitability_panel(campaign_insights):
+    st.markdown("**Brand suitability**")
+    veredito = campaign_insights.get("brand_suitability_verdict") or {}
+    st.write(f"**Veredito:** {veredito.get('veredito', 'Sem dados suficientes para avaliar')}")
+    if veredito.get("justificativa"):
+        st.write(veredito["justificativa"])
+    for alerta in veredito.get("alertas", []):
+        st.warning(alerta)
+
+
+def _render_campaign_insights_section(analysis, gemini_configurado):
+    campaign_insights = analysis.get("campaign_insights")
+    if not gemini_configurado or not campaign_insights:
+        return
+    _render_campaign_insights_metric_cards(campaign_insights)
+    col_left, col_right = st.columns(2)
+    with col_left:
+        _render_top_content_card(campaign_insights)
+        _render_brand_suitability_panel(campaign_insights)
+    with col_right:
+        _render_top_pilares_card(campaign_insights)
+
+
 def _render_export_buttons(analysis):
     st.subheader("Exportar relatório")
     html_report = exporter.generate_html_report(analysis)
@@ -583,6 +673,7 @@ def main():
         if state.get("demo_mode"):
             st.info("Resultado gerado em MODO DEMONSTRAÇÃO — dados fictícios, apenas para validar o pipeline fim-a-fim.")
         _render_metric_cards(analysis)
+        _render_campaign_insights_section(analysis, state.get("gemini_configurado", False))
         col_left, col_right = st.columns(2)
         with col_left:
             _render_demografia_card(analysis)
