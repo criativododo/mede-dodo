@@ -32,9 +32,18 @@ Este projeto ainda não é um repositório Git formal. O kit exige um repositór
 
 ## Sincronização com o Google Drive
 
-Desativada por padrão. Só é considerada quando existe um bloco declarativo `google_drive_sync` válido neste arquivo — sem ele, `driveSync.active` é sempre `false` (ver `lib/drive.mjs`). Estrutura de referência (ainda inativa — ative preenchendo o caminho real da pasta no Drive e trocando a cerca abaixo de ` ```text ` para ` ```google_drive_sync `):
+Ativada em 12/08/2026 — mapeamento aponta para a pasta `mede-dodo` no Drive, seguindo o
+mesmo padrão de espelho já usado por `dita-dodo` (`docs/` achatado + `PROGRESS.md`,
+`TIMELINE.md`, `README.md`, `DUMMY.md`, `specs/`, `decisions/`, na raiz do espelho;
+`CLAUDE.md` e skills `.claude/` nunca são espelhados, por não serem conhecimento de
+produto). URL web da pasta, só para referência humana (não lida pelo parser):
+`https://drive.google.com/drive/folders/1ytT3dHcVfqnSeggYqPB-VINlndJHInV4?usp=drive_link`.
+Caderno correspondente no NotebookLM (`notebooklm_url` abaixo, lido pela skill `/drive`
+para exibir o link no relatório de sincronização — não há integração automática de
+upload, apenas o vínculo por link):
+`https://notebook.google.com/notebook/62f4b450-72af-4b89-b32a-b05c91765b96`.
 
-```text
-google_drive_sync
-path: /caminho/absoluto/para/a/pasta/no/Drive
+```google_drive_sync
+path: /Users/danielperrut/Library/CloudStorage/GoogleDrive-criativododo@gmail.com/Meu Drive/0. SISTEMA D/sub-projects/mede-dodo
+notebooklm_url: https://notebook.google.com/notebook/62f4b450-72af-4b89-b32a-b05c91765b96
 ```

@@ -112,3 +112,41 @@ test('sincronização com Drive é puramente declarativa via CLAUDE.md — /inic
     assert.equal(rechecked.due, false, 'logo após marcar, ainda não passaram 6h');
   } finally { rmSync(fixture, { recursive: true, force: true }); }
 });
+
+test('drive --run copia só os documentos elegíveis, de forma idempotente, e reporta o link do NotebookLM', () => {
+  const fixture = tempDirectory();
+  try {
+    const { app, environment } = setupFixture(fixture);
+    const driveFolder = join(fixture, 'drive-folder');
+    mkdirSync(driveFolder, { recursive: true });
+    const notebookUrl = 'https://notebook.google.com/notebook/62f4b450-72af-4b89-b32a-b05c91765b96';
+    writeFileSync(join(app, 'CLAUDE.md'), ['# CLAUDE.md', '', '```google_drive_sync', `path: ${driveFolder}`, `notebooklm_url: ${notebookUrl}`, '```', ''].join('\n'));
+    writeFileSync(join(app, 'README.md'), '# projeto');
+    mkdirSync(join(app, 'specs'), { recursive: true });
+    writeFileSync(join(app, 'specs/SPEC-001.md'), '# spec');
+    writeFileSync(join(app, 'app.py'), 'print(1)');
+
+    const first = JSON.parse(runCli(app, ['drive', '--run'], environment));
+    assert.equal(first.driveFolder, driveFolder);
+    assert.equal(first.notebookUrl, notebookUrl);
+    assert.deepEqual(first.synced.sort(), ['README.md', 'specs/SPEC-001.md']);
+    assert.equal(existsSync(join(driveFolder, 'README.md')), true);
+    assert.equal(existsSync(join(driveFolder, 'specs/SPEC-001.md')), true);
+    assert.equal(existsSync(join(driveFolder, 'app.py')), false, 'código-fonte nunca é sincronizado');
+
+    const second = JSON.parse(runCli(app, ['drive', '--run'], environment));
+    assert.deepEqual(second.synced, [], 'nada mudou desde a última cópia — idempotente');
+    assert.deepEqual(second.skipped.sort(), ['README.md', 'specs/SPEC-001.md']);
+  } finally { rmSync(fixture, { recursive: true, force: true }); }
+});
+
+test('drive --run sem mapeamento ou sem a pasta montada falha com erro claro, sem tentar contornar', () => {
+  const fixture = tempDirectory();
+  try {
+    const { app, environment } = setupFixture(fixture);
+    assert.throws(() => runCli(app, ['drive', '--run'], environment), /google_drive_sync/);
+
+    writeFileSync(join(app, 'CLAUDE.md'), ['# CLAUDE.md', '', '```google_drive_sync', `path: ${join(fixture, 'pasta-inexistente')}`, '```', ''].join('\n'));
+    assert.throws(() => runCli(app, ['drive', '--run'], environment), /não encontrada|montada/);
+  } finally { rmSync(fixture, { recursive: true, force: true }); }
+});

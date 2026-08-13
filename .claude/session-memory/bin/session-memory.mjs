@@ -17,7 +17,7 @@ import {
 } from '../lib/documents.mjs';
 import { publishSessionWorktree } from '../lib/publish.mjs';
 import { createInitialMemory } from '../lib/scaffold.mjs';
-import { readDriveConfig, readDriveSyncState, markDriveSynced, evaluateDriveSync } from '../lib/drive.mjs';
+import { readDriveConfig, readDriveSyncState, markDriveSynced, evaluateDriveSync, planDriveSync, syncDriveFiles } from '../lib/drive.mjs';
 
 const root = process.cwd();
 const [command, ...rest] = process.argv.slice(2);
@@ -256,6 +256,30 @@ function commandDrive(commandArgs) {
   const config = configFor(commandArgs); ensureGitRepository(root, 'Repositório da aplicação'); ensureMemoryRepository(config); refreshHubForReading(config);
   const projectId = projectIdFor(commandArgs);
   const driveConfig = readDriveConfig(root);
+
+  if (commandArgs.run) {
+    if (!driveConfig) fail('Nenhum mapeamento google_drive_sync no CLAUDE.md deste projeto; nada a sincronizar.');
+    if (!existsSync(driveConfig.path)) fail(`Pasta do Drive não encontrada/montada: ${driveConfig.path}`);
+    const previousState = readDriveSyncState(config.memoryPath, projectId);
+    const files = planDriveSync(root);
+    const { manifest, synced, skipped } = syncDriveFiles({ root, destFolder: driveConfig.path, files, previousManifest: previousState.files ?? {} });
+    let markedAt;
+    const result = withEphemeralWorktree(config, (worktree, memoryBranch) => publishSessionWorktree({
+      worktree, remoteBranch: memoryBranch, message: 'docs(memory): registra sincronização automática do Drive',
+      prepareCommit: (wt) => { markedAt = nowIso(); markDriveSynced(wt, projectId, markedAt, manifest); },
+    }));
+    print({
+      project: projectId,
+      driveFolder: driveConfig.path,
+      notebookUrl: driveConfig.notebooklm_url ?? null,
+      totalEligible: files.length,
+      synced,
+      skipped,
+      ...result,
+      driveSync: evaluateDriveSync({ config: driveConfig, state: { lastSyncedAt: markedAt }, manualTrigger: true }),
+    });
+    return;
+  }
 
   if (commandArgs.mark) {
     if (!driveConfig) fail('Nenhum mapeamento google_drive_sync no CLAUDE.md deste projeto; nada a marcar.');

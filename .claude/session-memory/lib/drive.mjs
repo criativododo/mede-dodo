@@ -1,10 +1,77 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { atomicWrite, nowIso, readJson } from './core.mjs';
 import { projectPaths } from './documents.mjs';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 const BLOCK_PATTERN = /```google_drive_sync\n([\s\S]*?)```/;
+
+/**
+ * Critério de relevância documental (item 2 do pedido de governança do /drive):
+ * lista positiva restrita a documentos de arquitetura/produto na raiz do projeto e a
+ * subpastas de especificação — nunca código, build ou segredos. Diretórios como
+ * `.venv/`, `dist/`, `node_modules/`, `__pycache__/`, `data/` e `legado/` nem são
+ * percorridos: ficam de fora por não pertencerem a nenhuma das listas abaixo.
+ */
+const ROOT_DOC_FILES = ['README.md', 'DUMMY.md', 'PROGRESS.md', 'TIMELINE.md'];
+const ROOT_DOC_FILE_PATTERN = /^FINDER-.*\.md$/;
+const DOC_DIRECTORIES = ['specs', 'decisions', 'docs/issues'];
+
+function listMarkdownFilesRecursive(absoluteDir, relativeDir) {
+  if (!existsSync(absoluteDir)) return [];
+  const results = [];
+  for (const entry of readdirSync(absoluteDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const entryRelative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      results.push(...listMarkdownFilesRecursive(join(absoluteDir, entry.name), entryRelative));
+    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+      results.push(entryRelative);
+    }
+  }
+  return results;
+}
+
+/** Enumera, a partir da raiz do projeto, apenas os documentos elegíveis para o espelho do Drive. */
+export function planDriveSync(root) {
+  const files = [];
+  for (const name of ROOT_DOC_FILES) {
+    if (existsSync(join(root, name))) files.push(name);
+  }
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.isFile() && ROOT_DOC_FILE_PATTERN.test(entry.name)) files.push(entry.name);
+  }
+  for (const dir of DOC_DIRECTORIES) {
+    files.push(...listMarkdownFilesRecursive(join(root, dir), dir));
+  }
+  return files.sort();
+}
+
+/**
+ * Cópia idempotente (item 3 do pedido): compara o sha-256 de cada arquivo elegível com o
+ * manifesto da sincronização anterior e só grava no Drive o que é novo ou mudou. Nunca
+ * remove do Drive um arquivo que não tem mais correspondente local — o espelho só cresce
+ * ou atualiza, para não apagar por engano algo que outra pessoa tenha colocado lá.
+ */
+export function syncDriveFiles({ root, destFolder, files, previousManifest = {} }) {
+  const manifest = {};
+  const synced = [];
+  const skipped = [];
+  for (const relPath of files) {
+    const content = readFileSync(join(root, relPath));
+    const hash = createHash('sha256').update(content).digest('hex');
+    manifest[relPath] = hash;
+    const destPath = join(destFolder, relPath);
+    if (previousManifest[relPath] === hash && existsSync(destPath)) {
+      skipped.push(relPath);
+      continue;
+    }
+    mkdirSync(dirname(destPath), { recursive: true });
+    writeFileSync(destPath, content);
+    synced.push(relPath);
+  }
+  return { manifest, synced, skipped };
+}
 
 /**
  * O CLAUDE.md local (ou equivalente de especificação do projeto) é a única fonte de
@@ -35,11 +102,17 @@ export function readDriveConfig(root) {
 }
 
 export function readDriveSyncState(memoryPath, projectId) {
-  return readJson(projectPaths(memoryPath, projectId).driveState, { lastSyncedAt: null });
+  return readJson(projectPaths(memoryPath, projectId).driveState, { lastSyncedAt: null, files: {} });
 }
 
-export function markDriveSynced(memoryPath, projectId, when = nowIso()) {
-  const state = { lastSyncedAt: when };
+/**
+ * `files` é o manifesto relPath→sha256 da última cópia bem-sucedida. Quando omitido (ex.:
+ * marcação manual via `/fim` ou `drive --mark`, sem passar por `planDriveSync`/`syncDriveFiles`),
+ * preserva o manifesto anterior — só o timestamp muda.
+ */
+export function markDriveSynced(memoryPath, projectId, when = nowIso(), files) {
+  const previous = readDriveSyncState(memoryPath, projectId);
+  const state = { lastSyncedAt: when, files: files ?? previous.files ?? {} };
   atomicWrite(projectPaths(memoryPath, projectId).driveState, JSON.stringify(state, null, 2));
   return state;
 }
@@ -57,6 +130,7 @@ export function evaluateDriveSync({ config, state, manualTrigger = false, now = 
   return {
     active: true,
     folder: config.path,
+    notebookUrl: config.notebooklm_url ?? null,
     lastSyncedAt: state?.lastSyncedAt ?? null,
     due,
     reason: manualTrigger
