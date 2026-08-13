@@ -93,6 +93,14 @@ def test_prompt_template_requests_sentiment_and_purchase_signal_fields():
         assert categoria in prompt
 
 
+def test_prompt_template_never_offers_desconhecida_as_faixa_etaria_default():
+    prompt = gemini_analyzer.build_batch_prompt(["Qual o preço?"])
+
+    assert "ou desconhecida" not in prompt
+    assert "desconhecida" not in prompt
+    assert "faixa_etaria_estimada" in prompt
+
+
 def test_parse_batch_response_keeps_legacy_three_field_items_for_backward_compatibility():
     raw_text = '[{"comentario": "Qual o preço?", "intencao_compra": "alta", "faixa_etaria_estimada": "25-34"}]'
 
@@ -121,6 +129,13 @@ def test_summarize_brand_suitability_with_no_items_returns_sem_dados():
 
     assert result["indicador"] == "sem_dados"
     assert result["alertas"] == []
+    assert result["faixa_etaria_predominante"] == "sem_dados"
+    assert result["distribuicao_intencao_compra"] == {
+        "alta": 0.0,
+        "media": 0.0,
+        "baixa": 0.0,
+        "nenhuma": 0.0,
+    }
 
 
 def test_summarize_brand_suitability_computes_percentages_and_high_indicador():
@@ -138,6 +153,47 @@ def test_summarize_brand_suitability_computes_percentages_and_high_indicador():
     assert result["pct_interesse_comercial"] == 0.75
     assert result["pct_validacao_pessoal"] == 0.25
     assert result["alertas"] == []
+
+
+def test_summarize_brand_suitability_computes_intencao_compra_distribution():
+    items = [
+        {"intencao_compra": "alta", "categoria_sentimento": "interesse_comercial"},
+        {"intencao_compra": "alta", "categoria_sentimento": "interesse_comercial"},
+        {"intencao_compra": "media", "categoria_sentimento": "interesse_comercial"},
+        {"intencao_compra": "baixa", "categoria_sentimento": "validacao_pessoal"},
+    ]
+
+    result = gemini_analyzer.summarize_brand_suitability(items)
+
+    assert result["distribuicao_intencao_compra"] == {
+        "alta": 0.5,
+        "media": 0.25,
+        "baixa": 0.25,
+        "nenhuma": 0.0,
+    }
+
+
+def test_summarize_brand_suitability_picks_predominant_faixa_etaria_ignoring_unknown():
+    items = [
+        {"intencao_compra": "alta", "categoria_sentimento": "interesse_comercial", "faixa_etaria_estimada": "18-24"},
+        {"intencao_compra": "media", "categoria_sentimento": "interesse_comercial", "faixa_etaria_estimada": "18-24"},
+        {"intencao_compra": "baixa", "categoria_sentimento": "validacao_pessoal", "faixa_etaria_estimada": "25-34"},
+        {"intencao_compra": "nenhuma", "categoria_sentimento": "spam_ruido", "faixa_etaria_estimada": "desconhecida"},
+    ]
+
+    result = gemini_analyzer.summarize_brand_suitability(items)
+
+    assert result["faixa_etaria_predominante"] == "18-24"
+
+
+def test_summarize_brand_suitability_faixa_etaria_sem_dados_when_all_unknown():
+    items = [
+        {"intencao_compra": "nenhuma", "categoria_sentimento": "spam_ruido", "faixa_etaria_estimada": "desconhecida"},
+    ]
+
+    result = gemini_analyzer.summarize_brand_suitability(items)
+
+    assert result["faixa_etaria_predominante"] == "sem_dados"
 
 
 def test_summarize_brand_suitability_flags_high_pod_index_and_spam_ratio():

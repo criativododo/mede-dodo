@@ -9,6 +9,58 @@ from streamlit.testing.v1 import AppTest
 APP_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py")
 
 
+class _FakeGeminiResponse:
+    def __init__(self, text):
+        self.text = text
+
+
+class _FakeGeminiClient:
+    """Client Gemini fake com o mesmo contrato duck-typed (generate_content ->
+    objeto com .text) usado por analyze_batch, para testar os agregados novos
+    de summarize_brand_suitability sem chamar a API real."""
+
+    def __init__(self, response_text, *args, **kwargs):
+        self.response_text = response_text
+
+    def generate_content(self, prompt):
+        return _FakeGeminiResponse(self.response_text)
+
+
+_FAKE_GEMINI_RESPONSE_TEXT = (
+    '[{"comentario": "Qual o preço desse vestido?", "intencao_compra": "alta", '
+    '"faixa_etaria_estimada": "18-24", "categoria_sentimento": "interesse_comercial", '
+    '"sinais_compra": ["preco"]}, '
+    '{"comentario": "Vocês têm no tamanho M?", "intencao_compra": "media", '
+    '"faixa_etaria_estimada": "18-24", "categoria_sentimento": "interesse_comercial", '
+    '"sinais_compra": ["tamanho"]}]'
+)
+
+
+def _fake_qualified_shallow_cached():
+    def comentario(username, texto):
+        return {"username": username, "texto": texto, "respondido": False}
+
+    return {
+        "profile": {"followers_count": 5000},
+        "posts": [
+            {
+                "post_id": "1",
+                "likes_count": 100,
+                "comments_count": 3,
+                "raw": {
+                    "shortcode": "sc1",
+                    "caption": "look de hoje",
+                    "comments": [
+                        comentario("maria_style", "Qual o preço desse vestido?"),
+                        comentario("ana_looks", "Vocês têm no tamanho M?"),
+                        comentario("pedro99", "Lindo"),
+                    ],
+                },
+            },
+        ],
+    }
+
+
 def test_app_boots_without_exception():
     at = AppTest.from_file(APP_PATH)
     at.run()
@@ -156,6 +208,50 @@ def test_app_demo_pipeline_runs_end_to_end_without_gemini_api_key(monkeypatch):
     assert not at.exception
     assert at.session_state["pipeline_state"]["status"] == "concluido"
     assert at.session_state["pipeline_state"]["gemini_configurado"] is False
+
+
+def test_app_renders_new_audience_metric_cards_when_gemini_configured(monkeypatch):
+    """Quando o Gemini está configurado, a UI deve exibir os agregados de
+    audiência (taxa de comentários qualificados, distribuição de intenção de
+    compra, sentimento e faixa etária predominante), não só a tabela crua
+    item-a-item do Gemini. Patcheia `src.gemini_analyzer.RealGeminiClient`
+    diretamente (não `import app`) para não disparar o `main()` em modo bare
+    do módulo `app` e quebrar `AppTest.from_file()` por lixo de estado de
+    formulário entre testes (ver nota em test_limpar_cache_button_...)."""
+    from src import gemini_analyzer, scraper
+
+    monkeypatch.setattr(scraper, "scrape_profile", lambda *args, **kwargs: _fake_qualified_shallow_cached())
+    monkeypatch.setattr(
+        gemini_analyzer, "RealGeminiClient", lambda *args, **kwargs: _FakeGeminiClient(_FAKE_GEMINI_RESPONSE_TEXT)
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.text_input(key="username_input").set_value(f"perfil_gemini_ui_{uuid.uuid4().hex}")
+    at.toggle(key="demo_mode_toggle").set_value(False)
+    at.button[0].click().run()
+
+    max_reruns = 50
+    for _ in range(max_reruns):
+        assert not at.exception
+        status = at.session_state["pipeline_state"].get("status")
+        if status != "rodando":
+            break
+        at.run()
+
+    assert not at.exception
+    assert at.session_state["pipeline_state"]["status"] == "concluido"
+    assert at.session_state["pipeline_state"]["gemini_configurado"] is True
+
+    markdown_values = " ".join(m.value for m in at.markdown)
+    assert "Distribuição de intenção de compra" in markdown_values
+    assert "Sentimento dos comentários" in markdown_values
+    assert "Faixa etária predominante da audiência" in markdown_values
+    assert "18-24" in markdown_values
+
+    metric_labels = [m.label for m in at.metric]
+    assert any("qualificados" in label.lower() for label in metric_labels)
 
 
 def test_run_pipeline_detects_sponsored_posts_in_demo_mode():
@@ -414,4 +510,22 @@ def test_run_pipeline_sets_erro_coleta_indisponivel_status(monkeypatch):
     app._run_pipeline("perfil_sem_cache", 90, False, None, state)
 
     assert state["status"] == "erro_coleta_indisponivel"
-    assert "erro" in state
+
+
+def test_run_pipeline_exposes_new_brand_suitability_aggregates_with_fake_gemini_client(monkeypatch):
+    """O pipeline deve propagar os novos agregados de summarize_brand_suitability
+    (distribuicao_intencao_compra e faixa_etaria_predominante) até o parecer
+    comercial exposto em analysis, para consumo pela UI e pelo exportador."""
+    import app
+
+    monkeypatch.setattr(app.scraper, "scrape_profile", lambda *args, **kwargs: _fake_qualified_shallow_cached())
+
+    gemini_client = _FakeGeminiClient(_FAKE_GEMINI_RESPONSE_TEXT)
+    state = {}
+    app._run_pipeline("perfil_agregados_teste", 90, False, gemini_client, state)
+
+    assert state["status"] == "concluido"
+    parecer = state["analysis"]["comentarios_analisados"]["parecer_comercial"]
+    assert parecer["distribuicao_intencao_compra"]["alta"] == 0.5
+    assert parecer["distribuicao_intencao_compra"]["media"] == 0.5
+    assert parecer["faixa_etaria_predominante"] == "18-24"

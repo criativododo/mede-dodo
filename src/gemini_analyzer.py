@@ -20,6 +20,8 @@ DEFAULT_MAX_BATCHES = 2
 # exigidos para o item ser aceito).
 REQUIRED_RESPONSE_FIELDS = {"comentario", "intencao_compra", "faixa_etaria_estimada"}
 SENTIMENT_CATEGORIES = {"interesse_comercial", "validacao_pessoal", "duvida_critica", "spam_ruido"}
+INTENCAO_COMPRA_NIVEIS = ("alta", "media", "baixa", "nenhuma")
+FAIXA_ETARIA_DESCONHECIDA_VALORES = {None, "", "desconhecida"}
 PURCHASE_SIGNAL_TYPES = {
     "preco",
     "tamanho",
@@ -79,7 +81,7 @@ tecido, onde comprar, estoque, ou relato de quem já comprou) sobre elogio vago.
 Responda APENAS com uma lista JSON, um objeto por comentário, no formato:
 [{{"comentario": "<texto original>", \
 "intencao_compra": "alta|media|baixa|nenhuma", \
-"faixa_etaria_estimada": "<faixa ou desconhecida>", \
+"faixa_etaria_estimada": "<faixa etária, ex.: 18-24, 25-34, 35+>", \
 "categoria_sentimento": "interesse_comercial|validacao_pessoal|duvida_critica|spam_ruido", \
 "sinais_compra": ["preco"|"tamanho"|"caimento"|"tecido"|"onde_comprar"|"estoque"|"depoimento_compra", ...]}}]
 
@@ -93,6 +95,9 @@ dúvida ou crítica sobre marca ou produto; "spam_ruido" quando não há relaç�
 mesmo tendo passado no filtro local.
 - sinais_compra: liste todos os sinais concretos encontrados no comentário; use lista vazia [] \
 quando não houver nenhum.
+- faixa_etaria_estimada: sempre estime uma faixa plausível (ex.: "18-24", "25-34", "35+") a partir \
+do estilo/vocabulário do comentário e do perfil típico da rede social — o campo é obrigatório e \
+nunca deve ficar vazio; na dúvida, escolha a faixa mais provável para o contexto observado.
 
 Comentários:
 {comentarios}
@@ -180,11 +185,26 @@ def summarize_brand_suitability(items, pod_index=None):
             "pct_duvida_critica": 0.0,
             "pct_spam_ruido": 0.0,
             "comentarios_alta_intencao": 0,
+            "distribuicao_intencao_compra": {nivel: 0.0 for nivel in INTENCAO_COMPRA_NIVEIS},
+            "faixa_etaria_predominante": "sem_dados",
             "alertas": [],
             "resumo": "Sem comentários classificados pelo Gemini nesta janela para avaliar aderência comercial.",
         }
 
     contagem_sentimento = Counter(item.get("categoria_sentimento") for item in items)
+    contagem_intencao = Counter(item.get("intencao_compra") for item in items)
+    distribuicao_intencao_compra = {
+        nivel: contagem_intencao.get(nivel, 0) / total for nivel in INTENCAO_COMPRA_NIVEIS
+    }
+
+    faixas_conhecidas = [
+        item.get("faixa_etaria_estimada")
+        for item in items
+        if item.get("faixa_etaria_estimada") not in FAIXA_ETARIA_DESCONHECIDA_VALORES
+    ]
+    faixa_etaria_predominante = (
+        Counter(faixas_conhecidas).most_common(1)[0][0] if faixas_conhecidas else "sem_dados"
+    )
 
     def pct(categoria):
         return contagem_sentimento.get(categoria, 0) / total
@@ -227,6 +247,8 @@ def summarize_brand_suitability(items, pod_index=None):
         "pct_duvida_critica": pct_duvida,
         "pct_spam_ruido": pct_spam,
         "comentarios_alta_intencao": comentarios_alta_intencao,
+        "distribuicao_intencao_compra": distribuicao_intencao_compra,
+        "faixa_etaria_predominante": faixa_etaria_predominante,
         "alertas": alertas,
         "resumo": resumo,
     }

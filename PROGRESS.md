@@ -71,7 +71,14 @@
   (instanciado quando `GEMINI_API_KEY` está no ambiente; ausência tratada graciosamente,
   sem quebrar o app). Pendente: chamada real à API do Gemini não testada neste ambiente
   (sem `GEMINI_API_KEY` disponível). Índice de pods deliberadamente fora do schema do
-  Gemini (decisão de engenharia, ver ISSUE-0003.md).
+  Gemini (decisão de engenharia, ver ISSUE-0003.md). Prompt não oferece mais
+  "desconhecida" como faixa etária padrão — o Gemini é instruído a sempre estimar.
+  `summarize_brand_suitability` ganhou `distribuicao_intencao_compra` (proporção
+  alta/média/baixa/nenhuma) e `faixa_etaria_predominante` (moda das faixas conhecidas),
+  ambos exibidos em `app.py` (cards de taxa de comentários qualificados, distribuição de
+  intenção de compra, sentimento e faixa etária predominante) — exportadores HTML/PDF
+  (`src/exporter.py`) deliberadamente não tocados neste incremento (pedido explícito do
+  usuário).
 - [x] **ISSUE-0004** — Dashboard Streamlit e Exportador. `app.py` (pipeline em thread de
   background, Modo Demonstração, cards de Métricas/Demografia/Antifraude/Publis/Score,
   conectores reais de scraper e Gemini já plugados) e `src/exporter.py` (HTML/PDF) prontos
@@ -98,7 +105,7 @@
   que o engine já usa a base real do IBGE, não uma amostra sintética).
 
 ## Testes
-**131/131 passando** (`.venv/bin/python -m pytest tests/`), saída limpa (1 warning de
+**168/168 passando** (`.venv/bin/python -m pytest tests/`), saída limpa (1 warning de
 depreciação do `google.generativeai`, fora do escopo desta sessão).
 Evolução: 28 (ISSUE-0001/2/3) → 43 (+ISSUE-0005) → 57 (+ISSUE-0006) → 61 (+ISSUE-0004)
 → 70 (+fix região "para"/Pará, +`instaloader_fetch_fn` e fallback de cache)
@@ -132,6 +139,14 @@ usuário: filtro local reforçado contra elogio genérico decorado e comentário
 exibido em `app.py`/`src/exporter.py` sem alterar o layout Streamlit: +14 testes em
 `tests/test_filters.py`, `tests/test_gemini_analyzer.py` e `tests/test_exporter.py`, ver
 ISSUE-0003.md).
+→ 168 (2026-08-13, agregados de audiência em nível de perfil: prompt do Gemini não oferece
+mais "desconhecida" como faixa etária padrão, `summarize_brand_suitability` ganhou
+`distribuicao_intencao_compra` e `faixa_etaria_predominante`, novos cards em `app.py`
+(taxa de comentários qualificados, distribuição de intenção de compra, sentimento,
+faixa etária predominante) — `src/exporter.py` deliberadamente intocado neste incremento;
++6 testes em `tests/test_gemini_analyzer.py` e `tests/test_app.py`. Criado também
+`iniciar_app.command` na raiz, lançador de 1 clique para macOS que cria `.venv`, instala
+dependências e sobe o Streamlit — testado ao vivo, subiu o servidor e respondeu HTTP 200).
 
 ## MVP: o que funciona hoje
 Pipeline completo de ponta a ponta (`app.py`) em **Modo Demonstração** (dados fictícios

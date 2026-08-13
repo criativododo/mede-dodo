@@ -3,3 +3,8 @@ data/*.db
 __pycache__/
 *.pyc
 .env
+
+# Streamlit agent skills (symlinks específicos do ambiente, instalados
+# automaticamente ao rodar `streamlit run` — não devem ser versionados)
+.agents/skills/developing-with-streamlit
+.claude/skills/developing-with-streamlit

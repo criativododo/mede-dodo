@@ -342,7 +342,7 @@ def _init_state():
 
 
 def _render_metric_cards(analysis):
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Score DODÔ (0-10)", f"{analysis['score_dodo']:.2f}")
     col2.metric("Taxa de engajamento", f"{analysis['engagement_rate'] * 100:.2f}%")
     col2.caption(
@@ -351,6 +351,11 @@ def _render_metric_cards(analysis):
     )
     col3.metric("Índice de pods", f"{analysis['antifraude']['pod_index'] * 100:.1f}%")
     col4.metric("Taxa de resposta da criadora", f"{analysis['antifraude']['taxa_resposta_criadora'] * 100:.1f}%")
+    comentarios = analysis["comentarios_analisados"]
+    total_comentarios = comentarios["total"]
+    taxa_qualificados = (comentarios["qualificados"] / total_comentarios) if total_comentarios else 0.0
+    col5.metric("Taxa de comentários qualificados", f"{taxa_qualificados * 100:.1f}%")
+    col5.caption("Comentários com conteúdo próprio, descontados emojis soltos, elogio genérico e spam/bot.")
 
 
 def _render_demografia_card(analysis):
@@ -402,6 +407,47 @@ def _render_parecer_comercial(parecer):
         st.warning(alerta)
 
 
+INTENCAO_COMPRA_LABELS = {"alta": "Alta", "media": "Média", "baixa": "Baixa", "nenhuma": "Nenhuma"}
+
+SENTIMENTO_LABELS = {
+    "pct_interesse_comercial": "Interesse comercial",
+    "pct_validacao_pessoal": "Validação pessoal",
+    "pct_duvida_critica": "Dúvida/crítica",
+    "pct_spam_ruido": "Spam/ruído",
+}
+
+
+def _render_intencao_compra_card(parecer):
+    distribuicao = parecer.get("distribuicao_intencao_compra") or {}
+    if not distribuicao:
+        return
+    st.markdown("**Distribuição de intenção de compra**")
+    st.table(
+        [
+            {"Nível": INTENCAO_COMPRA_LABELS.get(nivel, nivel), "% dos comentários": f"{pct * 100:.1f}%"}
+            for nivel, pct in distribuicao.items()
+        ]
+    )
+
+
+def _render_sentimento_card(parecer):
+    st.markdown("**Sentimento dos comentários (comercial x afetivo x crítica)**")
+    st.table(
+        [
+            {"Categoria": label, "% dos comentários": f"{parecer.get(campo, 0.0) * 100:.1f}%"}
+            for campo, label in SENTIMENTO_LABELS.items()
+        ]
+    )
+
+
+def _render_faixa_etaria_card(parecer):
+    faixa = parecer.get("faixa_etaria_predominante")
+    if not faixa or faixa == "sem_dados":
+        st.caption("Faixa etária predominante: sem dados suficientes para estimar.")
+        return
+    st.markdown(f"**Faixa etária predominante da audiência:** {faixa}")
+
+
 def _render_comentarios_card(analysis, gemini_configurado):
     st.subheader("Comentários analisados")
     comentarios = analysis["comentarios_analisados"]
@@ -412,6 +458,9 @@ def _render_comentarios_card(analysis, gemini_configurado):
     parecer = comentarios.get("parecer_comercial")
     if parecer:
         _render_parecer_comercial(parecer)
+        _render_intencao_compra_card(parecer)
+        _render_sentimento_card(parecer)
+        _render_faixa_etaria_card(parecer)
     if comentarios["gemini_items"]:
         st.dataframe(comentarios["gemini_items"], use_container_width=True)
 
