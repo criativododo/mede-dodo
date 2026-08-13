@@ -162,6 +162,7 @@ def test_real_gemini_client_converts_sdk_rate_limit_error(monkeypatch):
     from google.genai.errors import APIError
 
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(gemini_analyzer.time, "sleep", lambda seconds: None)
 
     class FakeModels:
         def generate_content(self, *, model, contents, config):
@@ -180,6 +181,108 @@ def test_real_gemini_client_converts_sdk_rate_limit_error(monkeypatch):
         assert False, "esperava GeminiRateLimitError"
     except gemini_analyzer.GeminiRateLimitError:
         pass
+
+
+def test_real_gemini_client_retries_on_503_high_demand_and_recovers(monkeypatch):
+    from google.genai.errors import APIError
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    sleep_calls = []
+    monkeypatch.setattr(gemini_analyzer.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    call_count = {"n": 0}
+
+    class FakeModels:
+        def generate_content(self, *, model, contents, config):
+            call_count["n"] += 1
+            if call_count["n"] < 3:
+                raise APIError(
+                    code=503,
+                    response_json={
+                        "status": "UNAVAILABLE",
+                        "message": (
+                            "This model is currently experiencing high demand. "
+                            "Spikes in demand are usually temporary. Please try again later."
+                        ),
+                    },
+                )
+            return FakeResponse("[]")
+
+    class FakeSdkClient:
+        def __init__(self, *args, **kwargs):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_analyzer.genai, "Client", FakeSdkClient)
+
+    client = gemini_analyzer.RealGeminiClient()
+    response = client.generate_content("prompt qualquer")
+
+    assert response.text == "[]"
+    assert call_count["n"] == 3
+    assert sleep_calls == [2, 4]
+
+
+def test_real_gemini_client_raises_rate_limit_error_after_exhausting_503_retries(monkeypatch):
+    from google.genai.errors import APIError
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    sleep_calls = []
+    monkeypatch.setattr(gemini_analyzer.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    class FakeModels:
+        def generate_content(self, *, model, contents, config):
+            raise APIError(
+                code=503,
+                response_json={"status": "UNAVAILABLE", "message": "high demand"},
+            )
+
+    class FakeSdkClient:
+        def __init__(self, *args, **kwargs):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_analyzer.genai, "Client", FakeSdkClient)
+
+    client = gemini_analyzer.RealGeminiClient()
+
+    try:
+        client.generate_content("prompt qualquer")
+        assert False, "esperava GeminiRateLimitError"
+    except gemini_analyzer.GeminiRateLimitError:
+        pass
+
+    assert sleep_calls == [2, 4, 8]
+
+
+def test_real_gemini_client_does_not_retry_non_retryable_api_error(monkeypatch):
+    from google.genai.errors import APIError
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    sleep_calls = []
+    monkeypatch.setattr(gemini_analyzer.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    call_count = {"n": 0}
+
+    class FakeModels:
+        def generate_content(self, *, model, contents, config):
+            call_count["n"] += 1
+            raise APIError(code=400, response_json={"status": "INVALID_ARGUMENT", "message": "prompt inválido"})
+
+    class FakeSdkClient:
+        def __init__(self, *args, **kwargs):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_analyzer.genai, "Client", FakeSdkClient)
+
+    client = gemini_analyzer.RealGeminiClient()
+
+    try:
+        client.generate_content("prompt qualquer")
+        assert False, "esperava APIError propagado sem retry"
+    except APIError:
+        pass
+
+    assert call_count["n"] == 1
+    assert sleep_calls == []
 
 
 def test_real_gemini_client_requests_structured_json_response(monkeypatch):
