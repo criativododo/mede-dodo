@@ -274,3 +274,100 @@ def test_generate_pdf_report_handles_missing_audit_report_gracefully():
 
     assert isinstance(pdf_bytes, (bytes, bytearray))
     assert bytes(pdf_bytes).startswith(b"%PDF")
+
+
+# --- Sprint 002 Fase 4: Top Posts / Hashtags populares / Menções de marcas -
+
+
+def _make_audit_report_with_content_affinity():
+    posts = [
+        {
+            "post_id": "1",
+            "likes_count": 500,
+            "comments_count": 50,
+            "raw": {
+                "shortcode": "aaa",
+                "caption": "look novo #moda #verao com @marca_publi, publi paga #publi",
+                "published_at": "2026-08-01T00:00:00+00:00",
+                "media_type": "REEL",
+                "comments": [],
+            },
+        },
+        {
+            "post_id": "2",
+            "likes_count": 100,
+            "comments_count": 10,
+            "raw": {
+                "shortcode": "bbb",
+                "caption": "amei essa peça #moda, adorei @marca_organica",
+                "published_at": "2026-08-02T00:00:00+00:00",
+                "media_type": "IMAGE",
+                "comments": [],
+            },
+        },
+    ]
+    return metrics.build_audit_report(posts, followers_count=1000)
+
+
+def test_generate_html_report_includes_top_posts_hashtags_and_mentions_when_available():
+    analysis = make_analysis(audit_report=_make_audit_report_with_content_affinity())
+
+    html = exporter.generate_html_report(analysis)
+
+    assert "Top 3 Posts" in html
+    assert "https://www.instagram.com/p/aaa/" in html
+    assert "Hashtags populares" in html
+    assert "#moda" in html
+    assert "Menções de marcas" in html
+    assert "@marca_publi" in html and "@marca_organica" in html
+    assert "publi confirmada" in html
+    assert "menção orgânica" in html
+
+
+def test_generate_html_report_shows_placeholders_when_content_affinity_unavailable():
+    analysis = make_analysis(audit_report=_make_audit_report_with_followers_only())
+
+    html = exporter.generate_html_report(analysis)
+
+    assert exporter.POPULAR_TAGS_VAZIO_MSG in html
+    assert exporter.BRAND_MENTIONS_VAZIO_MSG in html
+
+
+def test_generate_html_report_shows_demographic_coverage_when_available():
+    posts = [
+        {
+            "post_id": "1",
+            "raw": {
+                "comments": [
+                    {"username": "maria_silva", "texto": "moro em sao paulo"},
+                    {"username": "joao_pedro", "texto": "top"},
+                ]
+            },
+        }
+    ]
+    audit_report = metrics.build_audit_report(posts, followers_count=1000)
+    analysis = make_analysis(audit_report=audit_report)
+
+    html = exporter.generate_html_report(analysis)
+
+    assert "Cobertura de gênero identificado" in html
+    assert "Cobertura de região identificada" in html
+    assert "amostragem de comentários públicos" in html
+
+
+def test_generate_pdf_report_includes_content_affinity_sections_without_raising():
+    analysis = make_analysis(audit_report=_make_audit_report_with_content_affinity())
+
+    pdf_bytes = exporter.generate_pdf_report(analysis)
+
+    assert isinstance(pdf_bytes, (bytes, bytearray))
+    assert bytes(pdf_bytes).startswith(b"%PDF")
+
+
+def test_generate_pdf_report_handles_content_affinity_unavailable_gracefully():
+    analysis = make_analysis(audit_report=_make_audit_report_with_followers_only())
+
+    pdf_bytes = exporter.generate_pdf_report(analysis)
+
+    assert isinstance(pdf_bytes, (bytes, bytearray))
+    assert bytes(pdf_bytes).startswith(b"%PDF")

@@ -256,6 +256,39 @@ def test_app_demo_mode_renders_campaign_insights_section_without_gemini_api_key(
     assert all(0.0 <= post["post_score"] <= 1.0 for post in campaign_insights["top_3_by_quality"])
 
 
+def test_app_demo_mode_renders_content_affinity_cards(monkeypatch):
+    """Sprint 002 Fase 4: os cards "Top 3 Posts", "Hashtags populares" e
+    "Menções de marcas" devem renderizar de fato na tela (via AppTest, não só
+    chamada direta da função) ao final de um fluxo real de Modo
+    Demonstração, já que demo_fetch_fn sempre gera posts patrocinados com
+    hashtags e menções (i % 3 == 0, determinístico)."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    assert not at.exception
+
+    at.text_input(key="username_input").set_value(f"perfil_demo_conteudo_ui_{uuid.uuid4().hex}")
+    at.toggle(key="demo_mode_toggle").set_value(True)
+    at.button[0].click().run()
+
+    max_reruns = 50
+    for _ in range(max_reruns):
+        assert not at.exception
+        status = at.session_state["pipeline_state"].get("status")
+        if status != "rodando":
+            break
+        at.run()
+
+    assert not at.exception
+    assert at.session_state["pipeline_state"]["status"] == "concluido"
+
+    subheader_values = [s.value for s in at.subheader]
+    assert "Top 3 Posts" in subheader_values
+    assert "Hashtags populares" in subheader_values
+    assert "Menções de marcas" in subheader_values
+
+
 def test_app_renders_provenance_card_with_status_per_engagement_rate(monkeypatch):
     """Card 'Proveniência e Escopo das Métricas' (Sprint 002 Fase 3,
     BENCHMARK-001.md §5.2): em Modo Demonstração, engagement_rate_by_followers
@@ -503,6 +536,91 @@ def test_run_pipeline_exposes_genero_pct_in_demo_mode():
     genero_pct = state["analysis"]["demografia"]["genero_pct"]
     assert set(genero_pct.keys()) == {"feminino", "masculino", "indeterminado"}
     assert abs(sum(genero_pct.values()) - 1.0) < 1e-9
+
+
+# --- Sprint 002 Fase 4: Top Posts / Hashtags / Menções / demografia com cobertura
+
+
+def test_run_pipeline_attaches_top_posts_popular_tags_and_brand_mentions_in_demo_mode():
+    """Modo Demonstração (demo_fetch_fn) sempre gera pelo menos 2 posts
+    'patrocinados' (is_sponsored = i % 3 == 0, determinístico) com hashtags
+    (#publi/#ad) e menções (@marca_fashion_demo/@outra_marca_demo) nas
+    legendas — prova de que o contrato canônico de conteúdo (Sprint 002
+    Fase 4) está de fato ligado ao pipeline real."""
+    import app
+
+    username = f"perfil_demo_conteudo_{uuid.uuid4().hex}"
+    state = {}
+    app._run_pipeline(username, 90, True, None, state)
+
+    assert state["status"] == "concluido"
+    audit_metrics = state["analysis"]["audit_report"]["metrics"]
+
+    top_posts = audit_metrics["top_posts"]
+    assert top_posts["status"] == "ok"
+    assert len(top_posts["posts"]) >= 1
+    assert all(item["link"].startswith("https://www.instagram.com/p/") for item in top_posts["posts"])
+
+    popular_tags = audit_metrics["popular_tags"]
+    assert popular_tags["status"] == "ok"
+    assert any(tag["tag"] in {"#publi", "#ad"} for tag in popular_tags["tags"])
+
+    brand_mentions = audit_metrics["brand_mentions"]
+    assert brand_mentions["status"] == "ok"
+    assert any(item["tipo"] == "publi_confirmada" for item in brand_mentions["mentions"])
+
+
+def test_run_pipeline_attaches_gender_and_region_distribution_with_coverage_in_demo_mode():
+    import app
+
+    username = f"perfil_demo_demografia_fase4_{uuid.uuid4().hex}"
+    state = {}
+    app._run_pipeline(username, 90, True, None, state)
+
+    assert state["status"] == "concluido"
+    audit_metrics = state["analysis"]["audit_report"]["metrics"]
+
+    gender_metric = audit_metrics["gender_distribution"]
+    assert gender_metric["status"] == "ok"
+    assert gender_metric["unit"] == "percent"
+    assert 0.0 <= gender_metric["value"] <= 100.0
+    assert any("amostragem" in r for r in gender_metric["ressalvas"])
+
+    region_metric = audit_metrics["region_distribution"]
+    assert region_metric["status"] == "ok"
+    assert region_metric["unit"] == "percent"
+
+
+def test_render_top_posts_card_never_raises_without_audit_report():
+    import app
+
+    app._render_top_posts_card({"username": "perfil_sem_audit_report"})
+    app._render_top_posts_card({"username": "perfil_audit_report_vazio", "audit_report": {}})
+    app._render_top_posts_card({"username": "perfil_metrics_vazio", "audit_report": {"metrics": {}}})
+
+
+def test_render_popular_tags_card_never_raises_without_audit_report():
+    import app
+
+    app._render_popular_tags_card({"username": "perfil_sem_audit_report"})
+    app._render_popular_tags_card({"username": "perfil_metrics_vazio", "audit_report": {"metrics": {}}})
+
+
+def test_render_brand_mentions_card_never_raises_without_audit_report():
+    import app
+
+    app._render_brand_mentions_card({"username": "perfil_sem_audit_report"})
+    app._render_brand_mentions_card({"username": "perfil_metrics_vazio", "audit_report": {"metrics": {}}})
+
+
+def test_render_demografia_card_never_raises_without_audit_report():
+    import app
+
+    analysis = {
+        "username": "perfil_sem_audit_report",
+        "demografia": {"genero_predominante": "indeterminado", "genero_pct": {}, "regioes": []},
+    }
+    app._render_demografia_card(analysis)
 
 
 def test_run_pipeline_returns_proportional_region_breakdown_and_handles_prefixed_gender_in_real_mode(monkeypatch):

@@ -421,7 +421,7 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
         # já populados por scraper.instaloader_fetch_fn/demo_fetch_fn), não os
         # `engagement_posts` simplificados de cima. Não substitui `engagement_rate`
         # (float legado consumido por app.py/src/exporter.py).
-        audit_report = metrics.build_audit_report(posts, followers_count)
+        audit_report = metrics.build_audit_report(posts, followers_count, names_db=names_db, ddd_to_uf=ddd_to_uf)
         database.save_audit_report(username, audit_report)
         average_engagement = metrics.calc_average_engagement(engagement_posts)
         fake_followers_estimate = metrics.estimate_fake_followers_risk(
@@ -606,6 +606,23 @@ def _render_demografia_card(analysis):
     regioes = demografia["regioes"]
     st.write(f"**Regiões detectadas:** {', '.join(regioes) if regioes else 'Nenhuma região detectada'}")
 
+    # Sprint 002 Fase 4 (BENCHMARK-001.md §4.4/§7.3): cobertura amostral —
+    # quantos comentários da amostra permitiram identificar gênero/região,
+    # não o universo de seguidores do perfil. audit_report ausente (analyses
+    # anteriores à Fase 4) -> nenhuma linha extra, nunca lança exceção.
+    audit_metrics = (analysis.get("audit_report") or {}).get("metrics") or {}
+    gender_metric = audit_metrics.get("gender_distribution") or {}
+    region_metric = audit_metrics.get("region_distribution") or {}
+    if gender_metric.get("status") == "ok":
+        st.caption(
+            f"Cobertura de gênero identificado: {gender_metric['value']:.1f}% da amostra de "
+            f"comentários ({gender_metric.get('total_identificados', 0)} nome(s) identificados)."
+        )
+    if region_metric.get("status") == "ok":
+        st.caption(f"Cobertura de região identificada: {region_metric['value']:.1f}% da amostra de comentários.")
+    for ressalva in gender_metric.get("ressalvas") or region_metric.get("ressalvas") or []:
+        st.caption(f"⚠️ {ressalva}")
+
 
 def _render_antifraude_card(analysis):
     st.subheader("Antifraude — possíveis pods")
@@ -634,6 +651,67 @@ def _render_publis_card(analysis):
             for item in publis
         ]
     )
+
+
+def _render_top_posts_card(analysis):
+    # Sprint 002 Fase 4 (BENCHMARK-001.md §4.4/§4.5, ISSUE-001.md §5.9): não
+    # depende do Gemini — ranking determinístico por engajamento absoluto
+    # (likes + comments), já calculado em src/metrics.py extract_top_posts.
+    st.subheader("Top 3 Posts")
+    metric = (analysis.get("audit_report") or {}).get("metrics", {}).get("top_posts") or {}
+    posts = metric.get("posts") or []
+    if metric.get("status") != "ok" or not posts:
+        st.caption(exporter.TOP_POSTS_VAZIO_MSG)
+        return
+    st.table(
+        [
+            {
+                "post": item.get("link") or item.get("post_id"),
+                "tipo": item.get("media_type") or "N/D",
+                "curtidas": item.get("likes_count", 0),
+                "comentários": item.get("comments_count", 0),
+                "engajamento (abs.)": item.get("engagement_absolute", 0),
+                "engajamento (%)": (
+                    f"{item['engagement_rate']:.2f}%" if item.get("engagement_rate") is not None else "N/D"
+                ),
+            }
+            for item in posts
+        ]
+    )
+
+
+def _render_popular_tags_card(analysis):
+    st.subheader("Hashtags populares")
+    metric = (analysis.get("audit_report") or {}).get("metrics", {}).get("popular_tags") or {}
+    tags = metric.get("tags") or []
+    if metric.get("status") != "ok" or not tags:
+        st.caption(exporter.POPULAR_TAGS_VAZIO_MSG)
+        return
+    st.table([{"hashtag": item["tag"], "ocorrências": item["count"]} for item in tags])
+
+
+def _render_brand_mentions_card(analysis):
+    # RF-09 (ISSUE-001.md §4.5): uma menção isolada não é prova de
+    # publicidade — a distinção 'publi_confirmada' x 'mencao_organica' já
+    # vem calculada em src/metrics.py extract_brand_mentions.
+    st.subheader("Menções de marcas")
+    metric = (analysis.get("audit_report") or {}).get("metrics", {}).get("brand_mentions") or {}
+    mentions = metric.get("mentions") or []
+    if metric.get("status") != "ok" or not mentions:
+        st.caption(exporter.BRAND_MENTIONS_VAZIO_MSG)
+        return
+    st.table(
+        [
+            {
+                "perfil": item["handle"],
+                "menções": item["count"],
+                "tipo": "Publi confirmada" if item["tipo"] == "publi_confirmada" else "Menção orgânica",
+            }
+            for item in mentions
+        ]
+    )
+    for ressalva in metric.get("ressalvas") or []:
+        st.caption(f"⚠️ {ressalva}")
 
 
 def _render_parecer_comercial(parecer):
@@ -929,9 +1007,12 @@ def main():
         with col_left:
             _render_demografia_card(analysis)
             _render_publis_card(analysis)
+            _render_top_posts_card(analysis)
         with col_right:
             _render_antifraude_card(analysis)
             _render_comentarios_card(analysis, state.get("gemini_configurado", False))
+            _render_popular_tags_card(analysis)
+            _render_brand_mentions_card(analysis)
 
         if not st.session_state.mostrar_relatorio:
             st.success("Relatório pronto! Clique abaixo para liberar a exportação em HTML/PDF/JSON.")

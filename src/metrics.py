@@ -1,7 +1,22 @@
-from collections import defaultdict
+import re
+from collections import Counter, defaultdict
 
-from src.filters import is_shallow_comment
+from src import demographics
+from src.filters import BRAND_MENTION_PATTERN, SPONSORED_PATTERNS, is_shallow_comment
 from src.scoring import get_influencer_tier
+
+_HASHTAG_PATTERN = re.compile(r"#(\w+)", re.UNICODE)
+
+# Sprint 002 Fase 4 (BENCHMARK-001.md §4.4/§7.3): toda distribuição
+# demográfica derivada de comentários precisa carregar esta ressalva — os
+# comentários públicos coletados são uma amostra, não o universo de
+# seguidores do perfil (ISSUE-001.md §7.3, Meta Insights doc referenciada no
+# benchmark).
+_DEMOGRAPHIC_SAMPLE_RESSALVA = (
+    "Os dados demográficos refletem apenas a amostragem de comentários "
+    "públicos capturados nesta coleta — não representam o universo total "
+    "de seguidores do perfil (BENCHMARK-001.md §4.4/§7.3)."
+)
 
 # Contrato canônico de métricas e proveniência (Sprint 002 — BENCHMARK-001.md §6/§7,
 # ISSUE-001.md §5.3/§5.4/§6.2). Cada métrica é um objeto autodescritivo (value/kind/
@@ -333,7 +348,251 @@ def calc_audience_authenticity_signal(engagement_by_followers_metric, followers_
     }
 
 
-def build_audit_report(posts, followers_count):
+def extract_top_posts(posts, limit=3, followers_count=None):
+    """top_posts (BENCHMARK-001.md §4.4/§4.5, ISSUE-001.md §5.9/§4.1): ranking
+    dos posts da amostra por engajamento absoluto (likes + comments), com o
+    engajamento relativo (sobre followers_count, quando informado) anexado a
+    cada item. Não é uma estimativa — os posts retornados já estão na
+    amostra coletada; 'indisponivel' só quando a amostra não tem nenhum
+    post."""
+    if not posts:
+        return {
+            "value": None,
+            "unit": "count",
+            "kind": None,
+            "source": "local_scraper_sample",
+            "confidence": None,
+            "status": "indisponivel",
+            "posts": [],
+            "ressalvas": ["Sem posts na amostra — top posts indisponível."],
+        }
+
+    ranked = sorted(posts, key=_interactions, reverse=True)[:limit]
+
+    items = []
+    for post in ranked:
+        raw = post.get("raw") or {}
+        shortcode = raw.get("shortcode")
+        absolute = _interactions(post)
+        items.append(
+            {
+                "post_id": post.get("post_id"),
+                "shortcode": shortcode,
+                "link": f"https://www.instagram.com/p/{shortcode}/" if shortcode else None,
+                "published_at": raw.get("published_at"),
+                "media_type": raw.get("media_type"),
+                "likes_count": post.get("likes_count") or 0,
+                "comments_count": post.get("comments_count") or 0,
+                "engagement_absolute": absolute,
+                "engagement_rate": (absolute / followers_count * 100) if followers_count else None,
+            }
+        )
+
+    return {
+        "value": len(items),
+        "unit": "count",
+        "kind": "derived",
+        "source": "local_scraper_sample",
+        "confidence": "high",
+        "status": "ok",
+        "posts": items,
+        "ressalvas": [],
+    }
+
+
+def extract_popular_tags(posts, limit=10):
+    """popular_tags (BENCHMARK-001.md §4.4, ISSUE-001.md §4.1): frequência de
+    hashtags nas legendas já coletadas (post.raw.caption) — só regex local
+    sobre texto já raspado, sem chamada externa. 'indisponivel' quando
+    nenhuma legenda coletada contém hashtag."""
+    counts = Counter()
+    for post in posts:
+        caption = (post.get("raw") or {}).get("caption") or ""
+        for tag in _HASHTAG_PATTERN.findall(caption):
+            counts[f"#{tag.lower()}"] += 1
+
+    if not counts:
+        return {
+            "value": None,
+            "unit": "count",
+            "kind": None,
+            "source": "local_scraper_sample",
+            "confidence": None,
+            "status": "indisponivel",
+            "tags": [],
+            "ressalvas": ["Nenhuma legenda coletada contém hashtag — tags populares indisponíveis."],
+        }
+
+    items = [{"tag": tag, "count": count} for tag, count in counts.most_common(limit)]
+
+    return {
+        "value": len(items),
+        "unit": "count",
+        "kind": "derived",
+        "source": "local_scraper_sample",
+        "confidence": "high",
+        "status": "ok",
+        "tags": items,
+        "ressalvas": [],
+    }
+
+
+def _post_has_sponsor_language(caption):
+    return any(pattern.search(caption) for pattern in SPONSORED_PATTERNS.values())
+
+
+def extract_brand_mentions(posts, limit=10):
+    """brand_mentions (BENCHMARK-001.md §4.4/§4.5, ISSUE-001.md §4.5): conta
+    menções a outros perfis/marcas (@handle) nas legendas já coletadas,
+    separando menções orgânicas de publis confirmadas (RF-09). Uma menção
+    isolada NÃO é prova de publicidade (ISSUE-001.md §4.5) — só é marcada
+    'publi_confirmada' quando a mesma legenda também contém linguagem
+    explícita de patrocínio (filters.SPONSORED_PATTERNS, o mesmo critério de
+    filters.detect_sponsored_posts). 'indisponivel' quando nenhuma legenda
+    coletada contém menção a outro perfil."""
+    counts = defaultdict(lambda: {"count": 0, "confirmadas": 0, "organicas": 0})
+
+    for post in posts:
+        caption = (post.get("raw") or {}).get("caption") or ""
+        if not caption:
+            continue
+        handles = BRAND_MENTION_PATTERN.findall(caption)
+        if not handles:
+            continue
+        is_publi = _post_has_sponsor_language(caption)
+        for handle in handles:
+            key = handle.lower()
+            counts[key]["count"] += 1
+            if is_publi:
+                counts[key]["confirmadas"] += 1
+            else:
+                counts[key]["organicas"] += 1
+
+    if not counts:
+        return {
+            "value": None,
+            "unit": "count",
+            "kind": None,
+            "source": "local_scraper_sample",
+            "confidence": None,
+            "status": "indisponivel",
+            "mentions": [],
+            "ressalvas": [
+                "Nenhuma legenda coletada contém menção a outro perfil (@handle) — "
+                "menções de marcas indisponíveis."
+            ],
+        }
+
+    ranked = sorted(counts.items(), key=lambda item: item[1]["count"], reverse=True)[:limit]
+    items = [
+        {
+            "handle": f"@{handle}",
+            "count": data["count"],
+            "confirmadas": data["confirmadas"],
+            "organicas": data["organicas"],
+            "tipo": "publi_confirmada" if data["confirmadas"] > 0 else "mencao_organica",
+        }
+        for handle, data in ranked
+    ]
+
+    return {
+        "value": len(items),
+        "unit": "count",
+        "kind": "derived",
+        "source": "local_scraper_sample",
+        "confidence": "medium",
+        "status": "ok",
+        "mentions": items,
+        "ressalvas": [
+            "Menção não é prova suficiente de publicidade por si só (ISSUE-001.md §4.5) — "
+            "'publi_confirmada' exige linguagem de patrocínio explícita na legenda, não "
+            "apenas a marcação (@handle)."
+        ],
+    }
+
+
+def calc_gender_distribution_metric(posts, names_db=None):
+    """gender_distribution (BENCHMARK-001.md §4.4/§7.3, Sprint 002 Fase 4):
+    envelope canônico em torno de demographics.summarize_gender_distribution
+    sobre os comentários já coletados na amostra (post.raw.comments). 'value'
+    é a cobertura em percentual (comentários com gênero identificado — F ou
+    M — sobre o total da amostra); 'indisponivel' sem comentários
+    coletados."""
+    names_db = names_db if names_db is not None else demographics.DEFAULT_NAMES_DB
+    comments = _extract_comments(posts)
+
+    if not comments:
+        return {
+            "value": None,
+            "unit": "percent",
+            "kind": None,
+            "source": "local_comment_sample",
+            "confidence": None,
+            "status": "indisponivel",
+            "counts": {"feminino": 0, "masculino": 0, "indeterminado": 0},
+            "percentuais": {"feminino": 0.0, "masculino": 0.0, "indeterminado": 0.0},
+            "total_identificados": 0,
+            "ressalvas": [
+                "Sem comentários coletados na amostra — distribuição de gênero indisponível.",
+                _DEMOGRAPHIC_SAMPLE_RESSALVA,
+            ],
+        }
+
+    summary = demographics.summarize_gender_distribution(comments, names_db=names_db)
+
+    return {
+        "value": summary["cobertura"] * 100,
+        "unit": "percent",
+        "kind": "estimated",
+        "source": "local_comment_sample_name_heuristic",
+        "confidence": "medium",
+        "status": "ok",
+        "counts": summary["counts"],
+        "percentuais": summary["percentuais"],
+        "total_identificados": summary["total_identificados"],
+        "ressalvas": [_DEMOGRAPHIC_SAMPLE_RESSALVA],
+    }
+
+
+def calc_region_distribution_metric(posts, ddd_to_uf=None):
+    """region_distribution (BENCHMARK-001.md §4.4/§7.3, Sprint 002 Fase 4):
+    mesmo padrão de envelope, em torno de
+    demographics.summarize_region_distribution_with_coverage. 'value' é a
+    cobertura em percentual (comentários com ao menos uma UF detectada sobre
+    o total da amostra); 'indisponivel' sem comentários coletados."""
+    ddd_to_uf = ddd_to_uf if ddd_to_uf is not None else demographics.DEFAULT_DDD_TO_UF
+    comments = _extract_comments(posts)
+
+    if not comments:
+        return {
+            "value": None,
+            "unit": "percent",
+            "kind": None,
+            "source": "local_comment_sample",
+            "confidence": None,
+            "status": "indisponivel",
+            "distribuicao": [],
+            "ressalvas": [
+                "Sem comentários coletados na amostra — distribuição de região indisponível.",
+                _DEMOGRAPHIC_SAMPLE_RESSALVA,
+            ],
+        }
+
+    summary = demographics.summarize_region_distribution_with_coverage(comments, ddd_to_uf=ddd_to_uf)
+
+    return {
+        "value": summary["cobertura"] * 100,
+        "unit": "percent",
+        "kind": "derived",
+        "source": "local_comment_sample",
+        "confidence": "medium",
+        "status": "ok",
+        "distribuicao": summary["distribuicao"],
+        "ressalvas": [_DEMOGRAPHIC_SAMPLE_RESSALVA],
+    }
+
+
+def build_audit_report(posts, followers_count, names_db=None, ddd_to_uf=None):
     """Contrato canônico de auditoria (BENCHMARK-001.md §6/§7, ISSUE-001.md
     §6.2). Cada métrica em `metrics` já é autodescritiva (value/kind/source/
     confidence/ressalvas); `provenance` resume a origem de cada campo num
@@ -341,10 +600,17 @@ def build_audit_report(posts, followers_count):
     Sprint 002 Fase 3 acrescenta a decomposição de qualidade da audiência
     (pod_index/shallow_ratio/creator_response_rate/
     audience_authenticity_signal — BENCHMARK-001.md §4.3/§7.2) às 3 taxas de
-    engajamento da Fase 1/2. Retrocompatível: não substitui nem altera
-    `scoring.calc_engagement_rate` (consumido por `app.py`/`src/exporter.py`
-    como `analysis["engagement_rate"]`) nem `analysis["antifraude"]`, é um
-    contrato adicional."""
+    engajamento da Fase 1/2. Fase 4 acrescenta Top Posts/tags populares/
+    menções de marca (BENCHMARK-001.md §4.4/§4.5, ISSUE-001.md §4.1/§4.5/
+    §5.9) e demografia expandida com cobertura amostral (BENCHMARK-001.md
+    §4.4/§7.3) — `names_db`/`ddd_to_uf` são injetáveis (mesmo padrão de
+    `demographics.infer_gender`/`infer_region`) para o pipeline real usar a
+    base IBGE completa carregada por `data_loaders`, com fallback para os
+    conjuntos de exemplo de `demographics` quando não informados.
+    Retrocompatível: não substitui nem altera `scoring.calc_engagement_rate`
+    (consumido por `app.py`/`src/exporter.py` como
+    `analysis["engagement_rate"]`) nem `analysis["antifraude"]`/
+    `analysis["demografia"]`, é um contrato adicional."""
     engagement_by_followers = calc_engagement_rate_by_followers(posts, followers_count)
     pod_index_metric = calc_pod_index_metric(posts)
 
@@ -355,6 +621,11 @@ def build_audit_report(posts, followers_count):
         "pod_index": pod_index_metric,
         "shallow_ratio": calc_shallow_ratio_metric(posts),
         "creator_response_rate": calc_creator_response_rate_metric(posts),
+        "top_posts": extract_top_posts(posts, followers_count=followers_count),
+        "popular_tags": extract_popular_tags(posts),
+        "brand_mentions": extract_brand_mentions(posts),
+        "gender_distribution": calc_gender_distribution_metric(posts, names_db=names_db),
+        "region_distribution": calc_region_distribution_metric(posts, ddd_to_uf=ddd_to_uf),
         "audience_authenticity_signal": calc_audience_authenticity_signal(
             engagement_by_followers, followers_count, pod_index_metric
         ),

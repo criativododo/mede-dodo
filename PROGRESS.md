@@ -365,3 +365,71 @@ autodescritivo do `audit_report`.
   sem extensão Chrome conectada) — a cobertura via `AppTest` acima valida o texto exato
   renderizado (subheader, markdown, captions), mas fica como pendência para validação visual
   manual antes de considerar o card "aprovado" do ponto de vista de design.
+
+## Sprint 002 — Fase 4: Top Posts, Tags/Menções e Demografia Expandida (2026-08-14)
+Quarta fase da Sprint 002 (worktree `mede-dodo-sprint002-fase4`, criado a partir de `main`
+pós-Fase 3), conforme `SPRINT-002/BENCHMARK-001.md` §4.4/§4.5 e `SPRINT-002/ISSUE-001.md`
+§4.1/§4.5/§5.9/§7.3. Fecha o catálogo de conteúdo/afinidade e expande a demografia com
+metadados de cobertura amostral, mantendo o mesmo envelope autodescritivo (`value`/`unit`/
+`kind`/`source`/`confidence`/`status`/`ressalvas`) usado pelas Fases 1-3.
+
+- **`src/metrics.py`** — `build_audit_report(posts, followers_count, names_db=None,
+  ddd_to_uf=None)` ganhou 5 novos campos em `metrics` (de 7 para 12; `provenance` de 7 para
+  12 entradas). `names_db`/`ddd_to_uf` são injetáveis (mesmo padrão de
+  `demographics.infer_gender`/`infer_region`), com fallback para os conjuntos de exemplo de
+  `src/demographics.py` quando não informados — o pipeline real (`app.py`) passa a base IBGE
+  completa já carregada por `data_loaders`.
+  - `top_posts` (`extract_top_posts(posts, limit=3, followers_count=None)`): ranking
+    determinístico por engajamento absoluto (likes + comments) descendente, com engajamento
+    relativo (sobre `followers_count`, quando informado) anexado a cada item — shortcode,
+    link (`https://www.instagram.com/p/{shortcode}/`), data, tipo de mídia, likes, comments.
+    Não depende do Gemini nem de `campaign_insights`.
+  - `popular_tags` (`extract_popular_tags(posts, limit=10)`): frequência de hashtags nas
+    legendas já coletadas (`post.raw.caption`), só regex local, case-insensitive.
+  - `brand_mentions` (`extract_brand_mentions(posts, limit=10)`, RF-09): frequência de
+    menções `@handle` nas legendas, separando `publi_confirmada` de `mencao_organica` — uma
+    menção isolada NÃO é marcada como publi; só quando a mesma legenda também contém
+    linguagem explícita de patrocínio (`filters.SPONSORED_PATTERNS`, o mesmo critério de
+    `filters.detect_sponsored_posts`). Ressalva explícita sempre presente (ISSUE-001.md
+    §4.5: "uma menção não é prova suficiente de publicidade").
+  - `gender_distribution`/`region_distribution`: envelopes em torno de duas novas funções
+    puras em `src/demographics.py` (`summarize_gender_distribution`,
+    `summarize_region_distribution_with_coverage`), computadas sobre os comentários já
+    presentes em `post.raw.comments`. `value` é a cobertura em percentual (comentários com
+    gênero/UF identificado sobre o total da amostra) — não o universo de seguidores do
+    perfil; ressalva fixa carregada em ambos (BENCHMARK-001.md §4.4/§7.3).
+  - `indisponivel`/`value=None` sem posts (top_posts), sem legendas com hashtag/menção
+    (popular_tags/brand_mentions) ou sem comentários coletados (gender/region), nunca lança
+    exceção — mesmo padrão das Fases 1-3.
+- **`src/demographics.py`** — `summarize_gender_distribution(comments, names_db=...)` e
+  `summarize_region_distribution_with_coverage(comments, ddd_to_uf=..., region_keywords=...)`
+  reaproveitam a mesma heurística nome-explícito-ou-@handle e DDD/menção já usada por
+  `app.py`, mas como funções puras testáveis isoladamente, devolvendo contagens, percentuais
+  e cobertura.
+- **`app.py`** — `_run_pipeline` passa `names_db`/`ddd_to_uf` (já carregados via
+  `data_loaders`) para `build_audit_report`. `_render_demografia_card` ganhou as duas linhas
+  de cobertura amostral + ressalva. Três novos cards, todos com fallback gracioso
+  (`exporter.TOP_POSTS_VAZIO_MSG`/`POPULAR_TAGS_VAZIO_MSG`/`BRAND_MENTIONS_VAZIO_MSG` quando
+  a métrica está indisponível): `_render_top_posts_card`, `_render_popular_tags_card`,
+  `_render_brand_mentions_card` (com ressalva RF-09 exibida). Chamados a partir de `main()`
+  no mesmo layout de duas colunas já existente.
+- **`src/exporter.py`** — três novas mensagens de estado vazio (mesmo padrão de
+  `PUBLIS_VAZIO_MSG`) e três novas seções, no HTML (`<h2>Top 3 Posts</h2>` com tabela,
+  `<h2>Hashtags populares</h2>` e `<h2>Menções de marcas</h2>` como listas) e no PDF
+  (mesmo conteúdo em `pdf.cell`/`pdf.multi_cell`, sempre com `new_x`/`new_y` explícitos nos
+  loops — evita a classe de regressão `FPDFException` já documentada na Fase 2). Seção
+  Demografia (HTML e PDF) ganhou as linhas de cobertura amostral. `audit_report` ausente ou
+  métrica `indisponivel` → estado vazio explícito, nunca exceção.
+- **Testes**: +22 em `tests/test_metrics.py` (as 3 funções de extração + os 2 envelopes de
+  demografia, isoladamente e via `build_audit_report`, mais o novo formato estrutural de 12
+  campos), +6 em `tests/test_demographics.py` (as 2 novas funções puras), +6 em
+  `tests/test_exporter.py` (seções presentes/ausentes em HTML e PDF, cobertura demográfica no
+  HTML), +8 em `tests/test_app.py` (integração real via `_run_pipeline` em Modo Demonstração
+  — `demo_fetch_fn` sempre gera ≥2 posts patrocinados com hashtag/menção, `i % 3 == 0`
+  determinístico —, robustez dos 3 novos `_render_*` sem `audit_report`, e 1 `AppTest` fim a
+  fim confirmando os 3 novos subheaders renderizados na tela real). **Suíte completa: 268 →
+  300 testes, 100% verde** (`.venv/bin/python -m pytest tests/`).
+- Verificação visual em navegador real não foi possível nesta sessão (mesmo motivo da Fase
+  3 — ambiente de background sem extensão Chrome conectada); a cobertura via `AppTest`
+  confirma os subheaders/conteúdo renderizados, mas fica como pendência de validação visual
+  manual.

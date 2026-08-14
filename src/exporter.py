@@ -16,6 +16,13 @@ PUBLIS_VAZIO_MSG = (
 )
 GEMINI_NAO_CONFIGURADO_MSG = "Análise de intenção via Gemini não configurada nesta sessão."
 
+# Sprint 002 Fase 4 (BENCHMARK-001.md §4.4/§4.5, ISSUE-001.md §4.1/§4.5) —
+# mensagens de estado vazio para as novas seções, seguindo o mesmo padrão de
+# PUBLIS_VAZIO_MSG/GEMINI_NAO_CONFIGURADO_MSG acima.
+TOP_POSTS_VAZIO_MSG = "Nenhum post disponível na amostra coletada para ranquear."
+POPULAR_TAGS_VAZIO_MSG = "Nenhuma hashtag identificada nas legendas coletadas nesta janela."
+BRAND_MENTIONS_VAZIO_MSG = "Nenhuma menção a outro perfil identificada nas legendas coletadas nesta janela."
+
 
 def _fmt_pct(value):
     try:
@@ -108,6 +115,71 @@ def _provenance_rows(audit_report):
     return rows
 
 
+# Seções "Top 3 Posts", "Hashtags populares" e "Menções de marcas" (Sprint
+# 002 Fase 4, ETAPA 3) — lêem os campos homônimos de src/metrics.py
+# build_audit_report (top_posts/popular_tags/brand_mentions). Mesmo padrão
+# de fallback gracioso de _provenance_rows: audit_report ausente ou métrica
+# "indisponivel" -> lista vazia, nunca lança exceção.
+def _top_posts_rows(audit_report):
+    metrics_map = (audit_report or {}).get("metrics") or {}
+    metric = metrics_map.get("top_posts") or {}
+    if metric.get("status") != "ok":
+        return []
+    return metric.get("posts") or []
+
+
+def _popular_tags_rows(audit_report):
+    metrics_map = (audit_report or {}).get("metrics") or {}
+    metric = metrics_map.get("popular_tags") or {}
+    if metric.get("status") != "ok":
+        return []
+    return metric.get("tags") or []
+
+
+def _brand_mentions_rows(audit_report):
+    metrics_map = (audit_report or {}).get("metrics") or {}
+    metric = metrics_map.get("brand_mentions") or {}
+    if metric.get("status") != "ok":
+        return [], []
+    return metric.get("mentions") or [], metric.get("ressalvas") or []
+
+
+def _demographic_coverage_lines(audit_report):
+    """Linhas de cobertura amostral (BENCHMARK-001.md §4.4/§7.3) para anexar
+    à seção Demografia: quantos comentários da amostra permitiram identificar
+    gênero/região, não o universo de seguidores do perfil."""
+    metrics_map = (audit_report or {}).get("metrics") or {}
+    lines = []
+
+    gender = metrics_map.get("gender_distribution") or {}
+    if gender.get("status") == "ok":
+        lines.append(
+            f"Cobertura de gênero identificado: {_fmt_provenance_value(gender.get('value'))} da amostra de "
+            f"comentários ({gender.get('total_identificados', 0)} nome(s) identificados)."
+        )
+
+    region = metrics_map.get("region_distribution") or {}
+    if region.get("status") == "ok":
+        lines.append(
+            f"Cobertura de região identificada: {_fmt_provenance_value(region.get('value'))} da amostra de "
+            "comentários."
+        )
+
+    ressalva = (gender.get("ressalvas") or region.get("ressalvas") or [None])[0]
+    if ressalva:
+        lines.append(ressalva)
+
+    return lines
+
+
+def _link_or_id_html(item):
+    link = item.get("link")
+    if link:
+        escaped = html_lib.escape(str(link))
+        return f'<a href="{escaped}">{escaped}</a>'
+    return html_lib.escape(str(item.get("post_id", "")))
+
+
 def generate_html_report(analysis: dict) -> str:
     """Gera um relatório HTML autocontido (CSS inline, sem CDN externo)."""
 
@@ -119,6 +191,9 @@ def generate_html_report(analysis: dict) -> str:
     demografia = analysis.get("demografia", {}) or {}
     genero = html_lib.escape(str(demografia.get("genero_predominante", "indeterminado")))
     regioes_texto = html_lib.escape(_regioes_texto(demografia.get("regioes")))
+    coverage_html = "".join(
+        f"<p>{html_lib.escape(line)}</p>" for line in _demographic_coverage_lines(analysis.get("audit_report"))
+    )
 
     antifraude = analysis.get("antifraude", {}) or {}
     pod_index = _fmt_float(antifraude.get("pod_index"))
@@ -152,6 +227,55 @@ def generate_html_report(analysis: dict) -> str:
         )
     else:
         publis_html = f"<p class='placeholder'>{html_lib.escape(PUBLIS_VAZIO_MSG)}</p>"
+
+    top_posts_rows = _top_posts_rows(analysis.get("audit_report"))
+    if top_posts_rows:
+        top_posts_rows_html = "".join(
+            "<tr>"
+            f"<td>{_link_or_id_html(item)}</td>"
+            f"<td>{html_lib.escape(str(item.get('media_type') or 'N/D'))}</td>"
+            f"<td>{item.get('likes_count', 0)}</td>"
+            f"<td>{item.get('comments_count', 0)}</td>"
+            f"<td>{item.get('engagement_absolute', 0)}</td>"
+            f"<td>{_fmt_provenance_value(item.get('engagement_rate'))}</td>"
+            "</tr>"
+            for item in top_posts_rows
+        )
+        top_posts_section = f"""
+        <table>
+            <thead><tr><th>Post</th><th>Tipo</th><th>Curtidas</th><th>Comentários</th><th>Engajamento (abs.)</th><th>Engajamento (%)</th></tr></thead>
+            <tbody>{top_posts_rows_html}</tbody>
+        </table>
+        """
+    else:
+        top_posts_section = f"<p class='placeholder'>{html_lib.escape(TOP_POSTS_VAZIO_MSG)}</p>"
+
+    popular_tags_rows = _popular_tags_rows(analysis.get("audit_report"))
+    if popular_tags_rows:
+        popular_tags_html = "".join(
+            f"<li>{html_lib.escape(str(item['tag']))}: {item['count']} ocorrência(s)</li>"
+            for item in popular_tags_rows
+        )
+        popular_tags_section = f"<ul>{popular_tags_html}</ul>"
+    else:
+        popular_tags_section = f"<p class='placeholder'>{html_lib.escape(POPULAR_TAGS_VAZIO_MSG)}</p>"
+
+    brand_mentions_rows, brand_mentions_ressalvas = _brand_mentions_rows(analysis.get("audit_report"))
+    if brand_mentions_rows:
+        brand_mentions_html = "".join(
+            f"<li>{html_lib.escape(str(item['handle']))}: {item['count']} menção(ões) — "
+            f"{'publi confirmada' if item['tipo'] == 'publi_confirmada' else 'menção orgânica'}</li>"
+            for item in brand_mentions_rows
+        )
+        brand_mentions_ressalvas_html = "".join(
+            f"<li>{html_lib.escape(ressalva)}</li>" for ressalva in brand_mentions_ressalvas
+        )
+        brand_mentions_section = f"""
+        <ul>{brand_mentions_html}</ul>
+        {f"<ul>{brand_mentions_ressalvas_html}</ul>" if brand_mentions_ressalvas_html else ""}
+        """
+    else:
+        brand_mentions_section = f"<p class='placeholder'>{html_lib.escape(BRAND_MENTIONS_VAZIO_MSG)}</p>"
 
     comentarios = analysis.get("comentarios_analisados", {}) or {}
     total_comentarios = comentarios.get("total", 0)
@@ -256,6 +380,7 @@ def generate_html_report(analysis: dict) -> str:
   <h2>Demografia</h2>
   <p><strong>Gênero predominante:</strong> {genero}</p>
   <p><strong>Regiões detectadas:</strong> {regioes_texto}</p>
+  {coverage_html}
 
   <h2>Antifraude</h2>
   <p><strong>Top repetidores (possíveis pods):</strong></p>
@@ -263,6 +388,15 @@ def generate_html_report(analysis: dict) -> str:
 
   <h2>Publis</h2>
   {publis_html}
+
+  <h2>Top 3 Posts</h2>
+  {top_posts_section}
+
+  <h2>Hashtags populares</h2>
+  {popular_tags_section}
+
+  <h2>Menções de marcas</h2>
+  {brand_mentions_section}
 
   <h2>Comentários analisados</h2>
   <p><strong>Total coletado:</strong> {total_comentarios} — <strong>Qualificados (não rasos):</strong> {qualificados}</p>
@@ -302,6 +436,10 @@ def generate_pdf_report(analysis: dict) -> bytes:
     gemini_items = comentarios.get("gemini_items", []) or []
     parecer_comercial = comentarios.get("parecer_comercial")
     provenance_rows = _provenance_rows(analysis.get("audit_report"))
+    coverage_lines = _demographic_coverage_lines(analysis.get("audit_report"))
+    top_posts_rows = _top_posts_rows(analysis.get("audit_report"))
+    popular_tags_rows = _popular_tags_rows(analysis.get("audit_report"))
+    brand_mentions_rows, brand_mentions_ressalvas = _brand_mentions_rows(analysis.get("audit_report"))
 
     pdf = FPDF()
     pdf.set_title(_pdf_safe(f"Relatorio DODO - {username}"))
@@ -327,7 +465,10 @@ def generate_pdf_report(analysis: dict) -> bytes:
     pdf.cell(0, 8, "Demografia", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("helvetica", "", 11)
     pdf.cell(0, 7, _pdf_safe(f"Genero predominante: {genero}"), new_x="LMARGIN", new_y="NEXT")
-    pdf.multi_cell(0, 7, _pdf_safe(f"Regioes detectadas: {regioes_texto}"))
+    pdf.multi_cell(0, 7, _pdf_safe(f"Regioes detectadas: {regioes_texto}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "I", 10)
+    for line in coverage_lines:
+        pdf.multi_cell(0, 6, _pdf_safe(line), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
     pdf.set_font("helvetica", "B", 12)
@@ -350,7 +491,50 @@ def generate_pdf_report(analysis: dict) -> bytes:
                 texto += f" | marca(s): {', '.join(item.get('marcas', []))}"
             pdf.multi_cell(0, 7, _pdf_safe(texto), new_x="LMARGIN", new_y="NEXT")
     else:
-        pdf.multi_cell(0, 7, _pdf_safe(PUBLIS_VAZIO_MSG))
+        pdf.multi_cell(0, 7, _pdf_safe(PUBLIS_VAZIO_MSG), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(2)
+
+    pdf.set_font("helvetica", "B", 12)
+    pdf.cell(0, 8, "Top 3 Posts", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "", 10)
+    if top_posts_rows:
+        for item in top_posts_rows:
+            engajamento_pct = _fmt_provenance_value(item.get("engagement_rate"))
+            texto = (
+                f"- {item.get('link') or item.get('post_id', '')} | tipo: {item.get('media_type') or 'N/D'} "
+                f"| curtidas: {item.get('likes_count', 0)} | comentarios: {item.get('comments_count', 0)} "
+                f"| engajamento abs.: {item.get('engagement_absolute', 0)} | engajamento: {engajamento_pct}"
+            )
+            pdf.multi_cell(0, 6, _pdf_safe(texto), new_x="LMARGIN", new_y="NEXT")
+    else:
+        pdf.multi_cell(0, 6, _pdf_safe(TOP_POSTS_VAZIO_MSG), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(2)
+
+    pdf.set_font("helvetica", "B", 12)
+    pdf.cell(0, 8, "Hashtags populares", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "", 10)
+    if popular_tags_rows:
+        for item in popular_tags_rows:
+            pdf.multi_cell(
+                0, 6, _pdf_safe(f"- {item['tag']}: {item['count']} ocorrencia(s)"), new_x="LMARGIN", new_y="NEXT"
+            )
+    else:
+        pdf.multi_cell(0, 6, _pdf_safe(POPULAR_TAGS_VAZIO_MSG), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(2)
+
+    pdf.set_font("helvetica", "B", 12)
+    pdf.cell(0, 8, "Mencoes de marcas", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "", 10)
+    if brand_mentions_rows:
+        for item in brand_mentions_rows:
+            tipo = "publi confirmada" if item["tipo"] == "publi_confirmada" else "mencao organica"
+            texto = f"- {item['handle']}: {item['count']} mencao(oes) - {tipo}"
+            pdf.multi_cell(0, 6, _pdf_safe(texto), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("helvetica", "I", 9)
+        for ressalva in brand_mentions_ressalvas:
+            pdf.multi_cell(0, 5, _pdf_safe(f"  Ressalva: {ressalva}"), new_x="LMARGIN", new_y="NEXT")
+    else:
+        pdf.multi_cell(0, 6, _pdf_safe(BRAND_MENTIONS_VAZIO_MSG), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
     pdf.set_font("helvetica", "B", 12)

@@ -167,3 +167,61 @@ def format_region_distribution(distribution):
     """Formata a distribuição de summarize_region_distribution como uma lista
     de strings 'UF (XX%)', ex.: ['SP (40%)', 'RJ (25%)', 'MG (15%)']."""
     return [f"{item['uf']} ({item['pct'] * 100:.0f}%)" for item in distribution]
+
+
+def summarize_gender_distribution(comments, names_db=DEFAULT_NAMES_DB):
+    """Demografia expandida com cobertura amostral (BENCHMARK-001.md §4.4,
+    §7.3; Sprint 002 Fase 4). Reaproveita a mesma heurística já usada por
+    app.py (nome explícito > @handle) sobre uma lista de comentários já
+    coletados e devolve contagens, percentuais F/M/indeterminado e a
+    cobertura (fração de comentários com gênero identificado — F ou M — sobre
+    o total da amostra). Lista vazia -> zeros, nunca lança exceção."""
+    total = len(comments)
+    counts = {"feminino": 0, "masculino": 0, "indeterminado": 0}
+
+    for comment in comments:
+        nome_explicito = comment.get("nome")
+        if nome_explicito:
+            genero = infer_gender(nome_explicito, names_db=names_db)
+        else:
+            genero = infer_gender_from_handle(comment.get("username"), names_db=names_db)
+        counts[genero] = counts.get(genero, 0) + 1
+
+    identificados = counts["feminino"] + counts["masculino"]
+    percentuais = {chave: (valor / total) if total else 0.0 for chave, valor in counts.items()}
+
+    return {
+        "counts": counts,
+        "percentuais": percentuais,
+        "total_identificados": identificados,
+        "total_comentarios": total,
+        "cobertura": (identificados / total) if total else 0.0,
+    }
+
+
+def summarize_region_distribution_with_coverage(comments, ddd_to_uf=DEFAULT_DDD_TO_UF, region_keywords=DEFAULT_REGION_KEYWORDS):
+    """Mesma extração de região por DDD/menção já usada por app.py, mas sobre
+    uma lista de comentários já coletados, com a cobertura amostral anexada
+    (BENCHMARK-001.md §4.4/§7.3): fração de comentários em que pelo menos uma
+    UF foi detectada sobre o total da amostra. Lista vazia -> zeros, nunca
+    lança exceção."""
+    total = len(comments)
+    detected_ufs = []
+    comentarios_com_regiao = 0
+
+    for comment in comments:
+        resultado = infer_region(comment.get("texto", ""), ddd_to_uf=ddd_to_uf, region_keywords=region_keywords)
+        ufs_no_comentario = []
+        for uf in resultado["por_ddd"] + resultado["por_mencao"]:
+            if uf not in ufs_no_comentario:
+                ufs_no_comentario.append(uf)
+        if ufs_no_comentario:
+            comentarios_com_regiao += 1
+        detected_ufs.extend(ufs_no_comentario)
+
+    return {
+        "distribuicao": summarize_region_distribution(detected_ufs),
+        "total_comentarios": total,
+        "comentarios_com_regiao": comentarios_com_regiao,
+        "cobertura": (comentarios_com_regiao / total) if total else 0.0,
+    }

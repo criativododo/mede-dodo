@@ -216,3 +216,71 @@ def test_format_region_distribution_renders_uf_with_rounded_percentage():
 
 def test_format_region_distribution_returns_empty_list_for_empty_distribution():
     assert demographics.format_region_distribution([]) == []
+
+
+def test_summarize_gender_distribution_empty_comments_returns_zeros():
+    result = demographics.summarize_gender_distribution([], names_db=CUSTOM_NAMES_DB)
+
+    assert result == {
+        "counts": {"feminino": 0, "masculino": 0, "indeterminado": 0},
+        "percentuais": {"feminino": 0.0, "masculino": 0.0, "indeterminado": 0.0},
+        "total_identificados": 0,
+        "total_comentarios": 0,
+        "cobertura": 0.0,
+    }
+
+
+def test_summarize_gender_distribution_counts_percentuais_and_coverage():
+    comments = [
+        {"username": "maria_silva"},
+        {"username": "maria2000"},
+        {"username": "joao_pedro"},
+        {"username": "xyz_qwerty123"},
+    ]
+
+    result = demographics.summarize_gender_distribution(comments, names_db=CUSTOM_NAMES_DB)
+
+    assert result["counts"] == {"feminino": 2, "masculino": 1, "indeterminado": 1}
+    assert result["percentuais"] == {"feminino": 0.5, "masculino": 0.25, "indeterminado": 0.25}
+    assert result["total_identificados"] == 3
+    assert result["total_comentarios"] == 4
+    assert result["cobertura"] == 0.75
+
+
+def test_summarize_gender_distribution_prefers_explicit_name_over_handle():
+    comments = [{"nome": "Maria", "username": "joao_desconhecido"}]
+
+    result = demographics.summarize_gender_distribution(comments, names_db=CUSTOM_NAMES_DB)
+
+    assert result["counts"] == {"feminino": 1, "masculino": 0, "indeterminado": 0}
+
+
+def test_summarize_region_distribution_with_coverage_empty_comments_returns_zeros():
+    result = demographics.summarize_region_distribution_with_coverage(
+        [], ddd_to_uf=CUSTOM_DDD_TO_UF, region_keywords=CUSTOM_REGION_KEYWORDS
+    )
+
+    assert result == {
+        "distribuicao": [],
+        "total_comentarios": 0,
+        "comentarios_com_regiao": 0,
+        "cobertura": 0.0,
+    }
+
+
+def test_summarize_region_distribution_with_coverage_computes_distribution_and_coverage():
+    comments = [
+        {"texto": "moro em Sao Paulo"},
+        {"texto": "vim la da Bahia"},
+        {"texto": "amei a peça, sem regiao aqui"},
+        {"texto": "outra da Bahia tambem"},
+    ]
+
+    result = demographics.summarize_region_distribution_with_coverage(
+        comments, ddd_to_uf=CUSTOM_DDD_TO_UF, region_keywords=CUSTOM_REGION_KEYWORDS
+    )
+
+    assert result["distribuicao"] == [{"uf": "BA", "pct": 2 / 3}, {"uf": "SP", "pct": 1 / 3}]
+    assert result["total_comentarios"] == 4
+    assert result["comentarios_com_regiao"] == 3
+    assert result["cobertura"] == 0.75

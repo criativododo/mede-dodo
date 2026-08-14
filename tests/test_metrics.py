@@ -462,6 +462,8 @@ _AUDIENCE_QUALITY_FIELDS = {
     "creator_response_rate",
     "audience_authenticity_signal",
 }
+_CONTENT_AFFINITY_FIELDS = {"top_posts", "popular_tags", "brand_mentions"}
+_DEMOGRAPHIC_FIELDS = {"gender_distribution", "region_distribution"}
 _METRIC_BASELINE_KEYS = {"value", "unit", "kind", "source", "confidence", "status", "ressalvas"}
 
 
@@ -471,7 +473,10 @@ def test_build_audit_report_has_canonical_metrics_and_provenance_shape():
     report = metrics.build_audit_report(posts, followers_count=1000)
 
     assert set(report.keys()) == {"metrics", "provenance"}
-    assert set(report["metrics"].keys()) == _ENGAGEMENT_RATE_FIELDS | _AUDIENCE_QUALITY_FIELDS
+    assert (
+        set(report["metrics"].keys())
+        == _ENGAGEMENT_RATE_FIELDS | _AUDIENCE_QUALITY_FIELDS | _CONTENT_AFFINITY_FIELDS | _DEMOGRAPHIC_FIELDS
+    )
 
     for field in _ENGAGEMENT_RATE_FIELDS:
         metric = report["metrics"][field]
@@ -481,11 +486,11 @@ def test_build_audit_report_has_canonical_metrics_and_provenance_shape():
             "post_count",
         }
 
-    for field in _AUDIENCE_QUALITY_FIELDS:
+    for field in _AUDIENCE_QUALITY_FIELDS | _CONTENT_AFFINITY_FIELDS | _DEMOGRAPHIC_FIELDS:
         metric = report["metrics"][field]
         assert _METRIC_BASELINE_KEYS <= set(metric.keys())
 
-    assert len(report["provenance"]) == 7
+    assert len(report["provenance"]) == 12
     for entry in report["provenance"]:
         assert set(entry.keys()) == {"field", "kind", "source", "confidence", "status"}
         assert entry["field"] in report["metrics"]
@@ -524,3 +529,225 @@ def test_build_audit_report_computes_reach_and_views_when_data_is_present():
     assert report["metrics"]["engagement_rate_by_followers"]["status"] == "ok"
     assert report["metrics"]["engagement_rate_by_reach"]["status"] == "ok"
     assert report["metrics"]["engagement_rate_by_views"]["status"] == "ok"
+
+
+# --- Sprint 002 Fase 4: extract_top_posts -----------------------------------
+
+
+def test_extract_top_posts_empty_posts_returns_indisponivel():
+    result = metrics.extract_top_posts([])
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+    assert result["posts"] == []
+
+
+def test_extract_top_posts_ranks_by_absolute_engagement_descending():
+    posts = [
+        {
+            "post_id": "p1",
+            "likes_count": 10,
+            "comments_count": 1,
+            "raw": {"shortcode": "aaa", "published_at": "2026-08-01T00:00:00+00:00", "media_type": "IMAGE"},
+        },
+        {
+            "post_id": "p2",
+            "likes_count": 500,
+            "comments_count": 50,
+            "raw": {"shortcode": "bbb", "published_at": "2026-08-02T00:00:00+00:00", "media_type": "REEL"},
+        },
+        {
+            "post_id": "p3",
+            "likes_count": 100,
+            "comments_count": 10,
+            "raw": {"shortcode": "ccc", "published_at": "2026-08-03T00:00:00+00:00", "media_type": "CAROUSEL"},
+        },
+    ]
+
+    result = metrics.extract_top_posts(posts, limit=2, followers_count=1000)
+
+    assert result["status"] == "ok"
+    assert result["value"] == 2
+    assert [item["post_id"] for item in result["posts"]] == ["p2", "p3"]
+    assert result["posts"][0]["shortcode"] == "bbb"
+    assert result["posts"][0]["link"] == "https://www.instagram.com/p/bbb/"
+    assert result["posts"][0]["media_type"] == "REEL"
+    assert result["posts"][0]["engagement_absolute"] == 550
+    assert round(result["posts"][0]["engagement_rate"], 4) == 55.0
+
+
+def test_extract_top_posts_engagement_rate_is_none_without_followers_count():
+    posts = [{"post_id": "p1", "likes_count": 10, "comments_count": 1, "raw": {"shortcode": "aaa"}}]
+
+    result = metrics.extract_top_posts(posts)
+
+    assert result["posts"][0]["engagement_rate"] is None
+
+
+def test_extract_top_posts_never_raises_on_missing_raw_or_counts():
+    posts = [{"post_id": "p1"}]
+
+    result = metrics.extract_top_posts(posts)
+
+    assert result["status"] == "ok"
+    assert result["posts"][0]["shortcode"] is None
+    assert result["posts"][0]["link"] is None
+    assert result["posts"][0]["likes_count"] == 0
+    assert result["posts"][0]["comments_count"] == 0
+
+
+# --- Sprint 002 Fase 4: extract_popular_tags --------------------------------
+
+
+def test_extract_popular_tags_no_captions_returns_indisponivel():
+    posts = [{"raw": {"caption": "sem hashtag aqui"}}, {"post_id": "p2"}]
+
+    result = metrics.extract_popular_tags(posts)
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+    assert result["tags"] == []
+
+
+def test_extract_popular_tags_counts_frequency_case_insensitive_and_sorted_desc():
+    posts = [
+        {"raw": {"caption": "amei o look #moda #Verao2026"}},
+        {"raw": {"caption": "#MODA demais, quero #verao2026 inteiro"}},
+        {"raw": {"caption": "#moda sempre"}},
+    ]
+
+    result = metrics.extract_popular_tags(posts, limit=10)
+
+    assert result["status"] == "ok"
+    assert result["tags"][0] == {"tag": "#moda", "count": 3}
+    assert result["tags"][1] == {"tag": "#verao2026", "count": 2}
+    assert result["value"] == 2
+
+
+def test_extract_popular_tags_respects_limit():
+    posts = [{"raw": {"caption": "#a #b #c"}}]
+
+    result = metrics.extract_popular_tags(posts, limit=2)
+
+    assert len(result["tags"]) == 2
+
+
+# --- Sprint 002 Fase 4: extract_brand_mentions ------------------------------
+
+
+def test_extract_brand_mentions_no_mentions_returns_indisponivel():
+    posts = [{"raw": {"caption": "sem nenhuma marca aqui"}}]
+
+    result = metrics.extract_brand_mentions(posts)
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+    assert result["mentions"] == []
+
+
+def test_extract_brand_mentions_separates_organic_from_confirmed_publi():
+    posts = [
+        {"raw": {"caption": "look de hoje com @marca_organica, amei"}},
+        {"raw": {"caption": "publi paga: use o código com @marca_publi #publi"}},
+    ]
+
+    result = metrics.extract_brand_mentions(posts)
+
+    by_handle = {item["handle"]: item for item in result["mentions"]}
+    assert by_handle["@marca_organica"]["tipo"] == "mencao_organica"
+    assert by_handle["@marca_organica"]["confirmadas"] == 0
+    assert by_handle["@marca_organica"]["organicas"] == 1
+    assert by_handle["@marca_publi"]["tipo"] == "publi_confirmada"
+    assert by_handle["@marca_publi"]["confirmadas"] == 1
+    assert "Menção não é prova suficiente" in result["ressalvas"][0]
+
+
+def test_extract_brand_mentions_counts_repeated_mentions_across_posts():
+    posts = [
+        {"raw": {"caption": "com @marca_x"}},
+        {"raw": {"caption": "de novo @marca_x por aqui"}},
+    ]
+
+    result = metrics.extract_brand_mentions(posts)
+
+    assert result["mentions"][0]["handle"] == "@marca_x"
+    assert result["mentions"][0]["count"] == 2
+
+
+# --- Sprint 002 Fase 4: gender_distribution / region_distribution metrics --
+
+
+_FASE4_NAMES_DB = {
+    "maria": {"F": 950, "M": 5},
+    "joao": {"F": 2, "M": 900},
+}
+_FASE4_DDD_TO_UF = {"11": "SP"}
+_FASE4_REGION_KEYWORDS = {"sao paulo": "SP"}
+
+
+def _post_with_comments(comments):
+    return [{"post_id": "p1", "raw": {"comments": comments}}]
+
+
+def test_calc_gender_distribution_metric_no_comments_returns_indisponivel():
+    result = metrics.calc_gender_distribution_metric([])
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+    assert any("amostragem" in r for r in result["ressalvas"])
+
+
+def test_calc_gender_distribution_metric_computes_coverage_and_ressalva():
+    posts = _post_with_comments(
+        [
+            {"username": "maria_silva", "texto": "linda"},
+            {"username": "joao_pedro", "texto": "top"},
+            {"username": "xyz123", "texto": "oi"},
+        ]
+    )
+
+    result = metrics.calc_gender_distribution_metric(posts, names_db=_FASE4_NAMES_DB)
+
+    assert result["status"] == "ok"
+    assert result["unit"] == "percent"
+    assert result["counts"] == {"feminino": 1, "masculino": 1, "indeterminado": 1}
+    assert result["total_identificados"] == 2
+    assert round(result["value"], 4) == round((2 / 3) * 100, 4)
+    assert any("amostragem" in r for r in result["ressalvas"])
+
+
+def test_calc_region_distribution_metric_no_comments_returns_indisponivel():
+    result = metrics.calc_region_distribution_metric([])
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+
+
+def test_calc_region_distribution_metric_computes_distribution_and_coverage():
+    posts = _post_with_comments(
+        [
+            {"username": "u1", "texto": "moro em sao paulo"},
+            {"username": "u2", "texto": "nada aqui"},
+        ]
+    )
+
+    result = metrics.calc_region_distribution_metric(posts, ddd_to_uf=_FASE4_DDD_TO_UF)
+
+    assert result["status"] == "ok"
+    assert result["unit"] == "percent"
+    assert result["distribuicao"] == [{"uf": "SP", "pct": 1.0}]
+    assert result["value"] == 50.0
+
+
+def test_build_audit_report_wires_gender_and_region_using_injected_dbs():
+    posts = _post_with_comments([{"username": "maria_silva", "texto": "moro em sao paulo"}])
+
+    report = metrics.build_audit_report(
+        posts,
+        followers_count=1000,
+        names_db=_FASE4_NAMES_DB,
+        ddd_to_uf=_FASE4_DDD_TO_UF,
+    )
+
+    assert report["metrics"]["gender_distribution"]["status"] == "ok"
+    assert report["metrics"]["gender_distribution"]["counts"]["feminino"] == 1
