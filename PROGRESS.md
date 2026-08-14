@@ -433,3 +433,83 @@ metadados de cobertura amostral, mantendo o mesmo envelope autodescritivo (`valu
   3 — ambiente de background sem extensão Chrome conectada); a cobertura via `AppTest`
   confirma os subheaders/conteúdo renderizados, mas fica como pendência de validação visual
   manual.
+
+## Sprint 002 — Rodada final de fechamento (2026-08-14)
+Rodada de fechamento formal da Sprint 002, executada em modo autônomo (worktree
+`mede-dodo-sprint002-fase4`, base para integração em `main`), cobrindo enriquecimento das
+fixtures de demonstração, sanity check do exportador/UI e bateria de testes fim-a-fim.
+**Nota de execução**: o merge fast-forward `worktree-mede-dodo-sprint002-fase4` → `main` e a
+remoção do worktree (`git worktree remove` + `git worktree prune`) não puderam ser
+executados nesta sessão — o harness de isolamento de worktree bloqueia qualquer comando Git
+que redirecione (via `cd`, `-C` ou equivalente) para o checkout principal fora do próprio
+worktree. Todo o trabalho desta rodada (fixtures + testes + esta entrada) foi commitado
+nesta mesma branch, que fica pronta para um fast-forward trivial e sem conflitos a partir de
+`main`; ver seção "Pendência" abaixo para o comando exato.
+
+- **`app.py` (`demo_fetch_fn`)** — `DEMO_CAPTION_TEMPLATES_ORGANIC`/`_SPONSORED` ampliados
+  (de 2 para 4 e de 2 para 3 legendas, respectivamente) para incluir hashtags de moda/
+  lifestyle reais (`#moda`, `#lookdodia`, `#tendencia`) e a menção `@estudioela`/
+  `@marca_parceira` exigidas nesta rodada, além dos termos de publi (`#publi`/`#ad`,
+  `@marca_fashion_demo`/`@outra_marca_demo`) já existentes desde a Fase 4. O restante do
+  fixture (Reels com `video_view_count`, imagens/carrosséis alternados, ≥2 posts
+  patrocinados determinísticos via `i % 3 == 0`, comentários qualificados cobrindo as 5
+  categorias de intenção comercial — preço/tecido/tamanho/envio/loja —, comentários rasos/
+  emoji para o filtro, respostas da criadora para `creator_response_rate` e repetição de
+  `pod_accounts` entre posts para o `pod_index`) já atendia integralmente ao pedido desde a
+  Fase 4 — não precisou de alteração estrutural, só de vocabulário mais rico nas legendas.
+- **Correção de UI**: `main()` prometia exportação em "HTML/PDF/JSON" na mensagem de sucesso
+  pós-conclusão, mas `_render_export_buttons` só implementa os botões HTML e PDF (nunca
+  existiu exportação JSON) — texto corrigido para não prometer um formato inexistente.
+- **`src/exporter.py`** — sanity check dirigido por 4 novos testes (`tests/test_exporter.py`)
+  cobrindo `generate_html_report`/`generate_pdf_report` sobre `build_audit_report` real nos
+  cenários: com Reels + publis, sem nenhum Reel (`engagement_rate_by_views` degrada para
+  `indisponivel`), sem nenhuma publi/menção (`popular_tags`/`brand_mentions` indisponíveis) e
+  amostra vazia (todas as 12 métricas indisponíveis) — nenhum dos dois exportadores lança
+  exceção em nenhum cenário, confirmando o comportamento já implementado nas Fases 1-4.
+- **`app.py`** — sanity check de UI: 1 novo teste `AppTest` fim a fim confirma título
+  ("métricaDODÔ"), subheader "Sessão do Instagram" na sidebar, badge de Modo Demonstração,
+  mensagem de sucesso corrigida (sem "JSON") e os dois botões de exportação
+  ("Baixar relatório (HTML)"/"Baixar relatório (PDF)") após o clique em "Ver Relatório".
+  **Nota de teste**: esse teste precisou ser posicionado logo após outro teste baseado em
+  `AppTest` (não ao final do arquivo) — reproduzimos, reordenando dois testes já existentes,
+  uma fragilidade pré-existente do ambiente (`streamlit==1.61.1` + Python 3.14.6): quando um
+  teste "bare" (`import app` direto, sem `AppTest`) roda imediatamente antes de um teste
+  `AppTest`, o próximo `st.form()` falha com `StreamlitAPIException: Forms cannot be nested
+  in other forms` por contaminação de estado global entre execuções — não é um defeito da
+  aplicação, e o mesmo padrão de adjacência (testes `AppTest` agrupados) já era seguido pelos
+  testes anteriores da Sprint 002.
+- **Launcher macOS (`iniciar_app.command`)** — validado íntegro: `chmod +x` já presente
+  (`rwxr-xr-x`), `bash -n` sem erro de sintaxe, cria `.venv` local sob demanda, instala
+  `requirements.txt` e delega para `.venv/bin/streamlit run app.py`. Nenhuma alteração
+  necessária.
+- **Suíte completa**: 300 → **305 testes, 100% verde**, confirmada em duas execuções
+  consecutivas de `.venv/bin/python -m pytest tests/` (18-19s cada, sem flakiness residual
+  nesta sessão). Ambiente local desta sessão precisou de `.venv` próprio (worktree não herda
+  `.venv` do checkout principal, ignorado via `.gitignore`) — `python3 -m venv .venv && 
+  .venv/bin/python -m pip install -r requirements.txt`.
+
+### Checklist de prontidão para testes de usuário
+- [x] Suíte automatizada 100% verde (305/305).
+- [x] Modo Demonstração gera um perfil fictício completo (Reels/imagens/carrosséis,
+      hashtags e menções de moda/lifestyle, ≥2 publis, comentários ricos) sem depender de
+      rede — pronto para demonstração visual ponta a ponta.
+- [x] Exportador HTML/PDF validado contra os 4 cenários de dados possíveis (completo, sem
+      Reels, sem publis, amostra vazia) sem exceção.
+- [x] Mensagens da UI (badges, sidebar, botões de exportação) auditadas e consistentes com o
+      que de fato é entregue (removida promessa de exportação JSON inexistente).
+- [x] Launcher `iniciar_app.command` íntegro e executável.
+- [ ] **Pendente**: validação visual manual no navegador real (nenhuma sessão desta Sprint
+      teve acesso à extensão Chrome em ambiente de background — pendência recorrente desde a
+      Fase 3/4, não resolvida nesta rodada).
+- [ ] **Pendente**: merge fast-forward desta branch para `main` e limpeza do worktree — não
+      executável a partir desta sessão isolada (ver nota de execução acima). Comando exato a
+      rodar a partir do checkout principal (`/Users/danielperrut/0. PROJETO/mede-dodo`):
+      ```
+      git merge --ff-only worktree-mede-dodo-sprint002-fase4
+      .venv/bin/python -m pytest tests/
+      git worktree remove .claude/worktrees/mede-dodo-sprint002-fase4
+      git worktree prune
+      ```
+- [ ] Backlog remanescente (BENCHMARK-001.md/ISSUE-001.md, não coberto nesta rodada):
+      histórico comercial/colaborações (P2), validação de `RealGeminiClient` contra a API
+      real do Gemini (ISSUE-0003), calibração do Score DODÔ com dados reais.

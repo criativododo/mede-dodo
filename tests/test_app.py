@@ -433,6 +433,49 @@ def test_app_hides_export_buttons_until_ver_relatorio_clicked():
     assert len(at.download_button) >= 1
 
 
+def test_app_full_demo_flow_renders_title_sidebar_and_both_export_buttons(monkeypatch):
+    """Sanity check de fechamento da Sprint 002: título, sidebar de sessão do
+    Instagram, badge de Modo Demonstração e os dois botões de exportação
+    (HTML e PDF, não mais 'JSON' — texto desatualizado corrigido nesta rodada)
+    devem aparecer sem exceção ao final do fluxo real Analisar -> Ver
+    Relatório."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    assert not at.exception
+    assert at.title[0].value == "métricaDODÔ"
+    sidebar_subheader_values = [s.value for s in at.sidebar.subheader]
+    assert "Sessão do Instagram" in sidebar_subheader_values
+
+    at.text_input(key="username_input").set_value(f"perfil_fechamento_sprint002_{uuid.uuid4().hex}")
+    at.toggle(key="demo_mode_toggle").set_value(True)
+    at.button[0].click().run()
+
+    max_reruns = 50
+    for _ in range(max_reruns):
+        assert not at.exception
+        status = at.session_state["pipeline_state"].get("status")
+        if status != "rodando":
+            break
+        at.run()
+
+    assert not at.exception
+    assert at.session_state["pipeline_state"]["status"] == "concluido"
+    info_values = [i.value for i in at.info]
+    assert any("MODO DEMONSTRAÇÃO" in value for value in info_values)
+
+    success_values = [s.value for s in at.success]
+    assert any("HTML/PDF" in value for value in success_values)
+    assert not any("JSON" in value for value in success_values)
+
+    next(b for b in at.button if b.label == "Ver Relatório").click().run()
+
+    assert not at.exception
+    download_labels = sorted(b.label for b in at.download_button)
+    assert download_labels == ["Baixar relatório (HTML)", "Baixar relatório (PDF)"]
+
+
 def test_app_gerar_novo_relatorio_resets_screen_without_clearing_cache(monkeypatch):
     from src import database
 

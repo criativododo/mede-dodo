@@ -371,3 +371,102 @@ def test_generate_pdf_report_handles_content_affinity_unavailable_gracefully():
 
     assert isinstance(pdf_bytes, (bytes, bytearray))
     assert bytes(pdf_bytes).startswith(b"%PDF")
+
+
+# --- Rodada final Sprint 002: sanity check do exportador em cenários variados --
+
+
+def _make_post(post_id, media_type, is_video, video_view_count, caption, likes=100, comments=5):
+    return {
+        "post_id": post_id,
+        "likes_count": likes,
+        "comments_count": comments,
+        "raw": {
+            "comments": [{"username": "seguidor_1", "texto": "Qual o preço?"}],
+            "caption": caption,
+            "shortcode": f"sc_{post_id}",
+            "media_type": media_type,
+            "is_video": is_video,
+            "video_view_count": video_view_count,
+        },
+    }
+
+
+def test_generate_html_and_pdf_reports_never_raise_with_reels_and_publis():
+    """Cenário completo: posts com Reels (video_view_count) e publis
+    detectadas (#publi/@marca) — engagement_rate_by_views e brand_mentions
+    devem vir 'ok', e nenhum exportador deve lançar exceção."""
+    posts = [
+        _make_post("p0", "REEL", True, 5000, "Parceria com @marca_parceira #publi #moda"),
+        _make_post("p1", "IMAGE", False, None, "Look de hoje #lookdodia"),
+        _make_post("p2", "CAROUSEL", False, None, "Feliz #tendencia"),
+        _make_post("p3", "REEL", True, 8000, "Amei @outra_marca #ad"),
+    ]
+    audit_report = metrics.build_audit_report(posts, followers_count=10000)
+    analysis = make_analysis(audit_report=audit_report)
+
+    assert audit_report["metrics"]["engagement_rate_by_views"]["status"] == "ok"
+    assert audit_report["metrics"]["brand_mentions"]["status"] == "ok"
+
+    html = exporter.generate_html_report(analysis)
+    pdf_bytes = exporter.generate_pdf_report(analysis)
+
+    assert isinstance(html, str) and len(html) > 100
+    assert isinstance(pdf_bytes, (bytes, bytearray)) and bytes(pdf_bytes).startswith(b"%PDF")
+
+
+def test_generate_html_and_pdf_reports_never_raise_without_reels():
+    """Cenário sem nenhum Reel na amostra (só IMAGE/CAROUSEL) —
+    engagement_rate_by_views deve degradar para 'indisponivel' sem quebrar
+    nenhum dos dois exportadores."""
+    posts = [
+        _make_post("p0", "IMAGE", False, None, "Look de hoje #lookdodia #moda"),
+        _make_post("p1", "CAROUSEL", False, None, "Parceria com @marca_x #publi"),
+    ]
+    audit_report = metrics.build_audit_report(posts, followers_count=10000)
+    analysis = make_analysis(audit_report=audit_report)
+
+    assert audit_report["metrics"]["engagement_rate_by_views"]["status"] == "indisponivel"
+
+    html = exporter.generate_html_report(analysis)
+    pdf_bytes = exporter.generate_pdf_report(analysis)
+
+    assert isinstance(html, str) and len(html) > 100
+    assert isinstance(pdf_bytes, (bytes, bytearray)) and bytes(pdf_bytes).startswith(b"%PDF")
+
+
+def test_generate_html_and_pdf_reports_never_raise_without_publis():
+    """Cenário sem nenhuma legenda com termo comercial ou menção — publis
+    (RF-09), popular_tags e brand_mentions devem ficar vazios/indisponíveis
+    sem quebrar nenhum dos dois exportadores."""
+    posts = [
+        _make_post("p0", "IMAGE", False, None, "Bom dia flor"),
+        _make_post("p1", "REEL", True, 3000, "Feliz demais hoje"),
+    ]
+    audit_report = metrics.build_audit_report(posts, followers_count=10000)
+    analysis = make_analysis(audit_report=audit_report, publis=[])
+
+    assert audit_report["metrics"]["popular_tags"]["status"] == "indisponivel"
+    assert audit_report["metrics"]["brand_mentions"]["status"] == "indisponivel"
+
+    html = exporter.generate_html_report(analysis)
+    pdf_bytes = exporter.generate_pdf_report(analysis)
+
+    assert isinstance(html, str) and len(html) > 100
+    assert isinstance(pdf_bytes, (bytes, bytearray)) and bytes(pdf_bytes).startswith(b"%PDF")
+
+
+def test_generate_html_and_pdf_reports_never_raise_with_partial_metrics_and_no_posts():
+    """Cenário de métricas parciais: build_audit_report sobre amostra vazia
+    (sem posts coletados) — todas as métricas do contrato canônico caem em
+    'indisponivel', e mesmo assim nenhum exportador deve lançar exceção."""
+    audit_report = metrics.build_audit_report([], followers_count=10000)
+    analysis = make_analysis(audit_report=audit_report, publis=[])
+
+    assert all(metric["status"] == "indisponivel" for metric in audit_report["metrics"].values())
+
+    html = exporter.generate_html_report(analysis)
+    pdf_bytes = exporter.generate_pdf_report(analysis)
+
+    assert isinstance(html, str) and len(html) > 100
+    assert isinstance(pdf_bytes, (bytes, bytearray)) and bytes(pdf_bytes).startswith(b"%PDF")

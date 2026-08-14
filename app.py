@@ -140,12 +140,15 @@ DEMO_COMMENT_TEMPLATES_SHALLOW = [
 DEMO_FIRST_NAMES_F = ["Maria", "Ana", "Juliana", "Camila"]
 DEMO_FIRST_NAMES_M = ["Joao", "Pedro", "Lucas", "Gabriel"]
 DEMO_CAPTION_TEMPLATES_ORGANIC = [
-    "Bom dia! Look de hoje ✨",
-    "Feliz com esse ensaio 💛 sem filtro",
+    "Bom dia! Look de hoje ✨ #lookdodia #moda",
+    "Feliz com esse ensaio 💛 sem filtro #tendencia",
+    "Sextou com esse conjunto novo, amei a produção com @estudioela 📸 #moda #lookdodia",
+    "Inspiração de look pra essa semana #tendencia #moda #lookdodia",
 ]
 DEMO_CAPTION_TEMPLATES_SPONSORED = [
-    "Parceria com @marca_fashion_demo — usem o cupom DODO10 #publi",
-    "Amei esse vestido da @outra_marca_demo, super confortável #ad",
+    "Parceria com @marca_fashion_demo — usem o cupom DODO10 #publi #moda",
+    "Amei esse vestido da @outra_marca_demo, super confortável #ad #lookdodia",
+    "Nova coleção em parceria com @marca_parceira, glow total #publi #tendencia",
 ]
 
 
@@ -1015,7 +1018,7 @@ def main():
             _render_brand_mentions_card(analysis)
 
         if not st.session_state.mostrar_relatorio:
-            st.success("Relatório pronto! Clique abaixo para liberar a exportação em HTML/PDF/JSON.")
+            st.success("Relatório pronto! Clique abaixo para liberar a exportação em HTML/PDF.")
             if st.button("Ver Relatório"):
                 st.session_state.mostrar_relatorio = True
                 st.rerun()
