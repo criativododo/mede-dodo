@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import instaloader
 
 from src import database
+from src import rate_controller as rate_controller_module
 
 _logger = logging.getLogger(__name__)
 
@@ -338,6 +339,11 @@ def scrape_profile(
     throttle_fn()
     try:
         raw = fetch_fn(username, cookies)
+    except rate_controller_module.SafeStop:
+        # 429/403/challenge: parar de forma explícita, não degradar
+        # silenciosamente para um cache que pode estar desatualizado
+        # (FINDER-003 §4.1/§6 — comportamento observável, não evasivo).
+        raise
     except Exception as exc:
         fallback = database.get_cached_data(username, window_days=None, source=source, db_path=db_path)
         if fallback is not None:

@@ -6,8 +6,10 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import instaloader
+import pytest
 
 from src import database
+from src import rate_controller
 from src import scraper
 
 
@@ -963,3 +965,32 @@ def test_instaloader_fetch_fn_reraises_other_connection_errors_for_profile_resol
         assert False, "esperava ConnectionException"
     except instaloader.exceptions.ConnectionException as exc:
         assert "bloqueou" in str(exc)
+
+
+def test_scrape_profile_reraises_safe_stop_without_falling_back_to_cache_even_when_cache_exists():
+    db_path = make_temp_db()
+    try:
+        database.save_profile_data(
+            "perfil_com_cache_mas_safe_stop",
+            posts=[{"post_id": "1", "raw": {}, "likes_count": 5, "comments_count": 1}],
+            bio="bio antiga",
+            followers_count=300,
+            db_path=db_path,
+        )
+
+        def fetch_fn_safe_stop(username, cookies):
+            raise rate_controller.SafeStop(reason="http_429")
+
+        try:
+            scraper.scrape_profile(
+                "perfil_com_cache_mas_safe_stop",
+                window_days=0,
+                fetch_fn=fetch_fn_safe_stop,
+                throttle_fn=lambda: None,
+                db_path=db_path,
+            )
+            assert False, "esperava SafeStop"
+        except rate_controller.SafeStop as exc:
+            assert exc.reason == "http_429"
+    finally:
+        os.unlink(db_path)
