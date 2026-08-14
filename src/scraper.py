@@ -20,6 +20,17 @@ _logger = logging.getLogger(__name__)
 # alternativo nesta versão).
 _DELETED_SCHEMA_SIGNATURE = "has been deleted. you cannot use this schema"
 
+# Sinais textuais de checkpoint/challenge do Instagram (Instaloader não expõe
+# uma exceção dedicada para isso — surge como ConnectionException com uma
+# dessas strings na mensagem, conforme troubleshooting.html da lib, ref. [1]
+# no FINDER-003). Pausa e pede ação humana — nunca contorna (FINDER-003 §4.4).
+_CHECKPOINT_SIGNATURES = ("checkpoint_required", "challenge_required")
+
+
+def _is_checkpoint_signal(exc_text):
+    lowered = exc_text.lower()
+    return any(signature in lowered for signature in _CHECKPOINT_SIGNATURES)
+
 # Maior janela selecionável em app.py (WINDOW_OPTIONS = [30, 60, 90]) — a coleta real
 # nunca busca posts mais antigos que isso, senão a "janela de análise" da UI não
 # corresponderia aos posts realmente varridos.
@@ -213,11 +224,13 @@ def _resolve_profile_via_topsearch(loader, username):
     return None
 
 
-def instaloader_fetch_fn(username, cookies=None):
+def instaloader_fetch_fn(username, cookies=None, rate_controller=None, on_progress=None):
     # cookies, se fornecido, é o caminho de um arquivo de sessão local salvo
     # previamente via Instaloader.save_session_to_file (login manual único, fora
     # deste código) — evita reautenticar a cada coleta. Quando não fornecido,
     # tenta autodetectar qualquer sessão salva em SESSION_DIR.
+    active_controller = rate_controller or rate_controller_module.NULL_RATE_CONTROLLER
+
     loader = instaloader.Instaloader()
     if cookies:
         session_username = _session_username_from_path(cookies) or username
@@ -225,8 +238,17 @@ def instaloader_fetch_fn(username, cookies=None):
     else:
         load_any_available_session(loader)
 
+    active_controller.next_wait("resolucao_inicial")
+
     try:
         profile = instaloader.Profile.from_username(loader.context, username)
+    except instaloader.exceptions.TooManyRequestsException:
+        _logger.error(
+            "Coleta de '%s' interrompida: Instagram sinalizou 429 (rate limit) ao "
+            "resolver o perfil.", username,
+        )
+        active_controller.observe_response(status_code=429)
+        raise
     except (
         instaloader.exceptions.ConnectionException,
         instaloader.exceptions.QueryReturnedBadRequestException,
@@ -260,6 +282,13 @@ def instaloader_fetch_fn(username, cookies=None):
                 username,
             )
             profile = fallback_profile
+        elif _is_checkpoint_signal(str(exc)):
+            _logger.error(
+                "Coleta de '%s' interrompida: sinal de checkpoint/challenge do Instagram "
+                "ao resolver o perfil.", username,
+            )
+            active_controller.observe_response(challenge=True)
+            raise
         else:
             _logger.error("Coleta de '%s' falhou ao resolver o perfil (conexão): %s", username, exc)
             raise
@@ -267,6 +296,7 @@ def instaloader_fetch_fn(username, cookies=None):
         _logger.error("Coleta de '%s' falhou de forma inesperada ao resolver o perfil: %s", username, exc)
         raise
     cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_WINDOW_DAYS)
+    total_hint = min(getattr(profile, "mediacount", None) or MAX_POSTS_SAFETY_CAP, MAX_POSTS_SAFETY_CAP)
 
     posts = []
     # get_posts() geralmente retorna do mais recente para o mais antigo, mas o
@@ -281,7 +311,29 @@ def instaloader_fetch_fn(username, cookies=None):
     # (MAX_POSTS_SAFETY_CAP) segue limitando o pior caso (perfil sem nenhum post
     # dentro da janela).
     past_pinned_zone = False
-    for post in profile.get_posts():
+    posts_iterator = iter(profile.get_posts())
+    while True:
+        try:
+            post = next(posts_iterator)
+        except StopIteration:
+            break
+        except instaloader.exceptions.TooManyRequestsException:
+            _logger.error(
+                "Coleta de '%s' interrompida durante a paginação de posts: 429 "
+                "(rate limit).", username,
+            )
+            active_controller.observe_response(status_code=429)
+            raise
+        except instaloader.exceptions.ConnectionException as exc:
+            if _is_checkpoint_signal(str(exc)):
+                _logger.error(
+                    "Coleta de '%s' interrompida durante a paginação de posts: sinal "
+                    "de checkpoint/challenge do Instagram.", username,
+                )
+                active_controller.observe_response(challenge=True)
+                raise
+            raise
+
         if len(posts) >= MAX_POSTS_SAFETY_CAP:
             break
 
@@ -292,6 +344,7 @@ def instaloader_fetch_fn(username, cookies=None):
             continue
         past_pinned_zone = True
 
+        active_controller.next_wait("secao_post_metadata")
         posts.append(
             {
                 "post_id": str(post.mediaid),
@@ -305,6 +358,8 @@ def instaloader_fetch_fn(username, cookies=None):
                 "comments_count": post.comments,
             }
         )
+        if on_progress is not None:
+            on_progress(len(posts), total_hint)
 
     return {
         "bio": profile.biography,

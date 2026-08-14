@@ -967,6 +967,133 @@ def test_instaloader_fetch_fn_reraises_other_connection_errors_for_profile_resol
         assert "bloqueou" in str(exc)
 
 
+def test_instaloader_fetch_fn_calls_rate_controller_and_progress_callback_per_post(monkeypatch):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+        mediacount = 2
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+            return iter(
+                [
+                    FakePost(1, "a", "legenda1", 10, 0, recent),
+                    FakePost(2, "b", "legenda2", 20, 0, recent),
+                ]
+            )
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    wait_calls = []
+
+    class TrackingController:
+        def next_wait(self, operation):
+            wait_calls.append(operation)
+
+        def observe_response(self, status_code=None, challenge=False):
+            pass
+
+    progress_calls = []
+
+    result = scraper.instaloader_fetch_fn(
+        "perfil_fake",
+        cookies=None,
+        rate_controller=TrackingController(),
+        on_progress=lambda processed, total: progress_calls.append((processed, total)),
+    )
+
+    assert wait_calls == ["resolucao_inicial", "secao_post_metadata", "secao_post_metadata"]
+    assert progress_calls == [(1, 2), (2, 2)]
+    assert len(result["posts"]) == 2
+
+
+def test_instaloader_fetch_fn_defaults_to_null_rate_controller_without_slowing_down(monkeypatch):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+            return iter([FakePost(1, "a", "legenda1", 10, 0, recent)])
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    assert len(result["posts"]) == 1
+
+
+def test_instaloader_fetch_fn_raises_safe_stop_on_too_many_requests_during_pagination(monkeypatch):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+
+            def _gen():
+                yield FakePost(1, "a", "legenda1", 10, 0, recent)
+                raise instaloader.exceptions.TooManyRequestsException("429 Too Many Requests")
+
+            return _gen()
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+    controller = rate_controller.RateController(sleep_fn=lambda s: None)
+
+    with pytest.raises(rate_controller.SafeStop) as excinfo:
+        scraper.instaloader_fetch_fn("perfil_fake", cookies=None, rate_controller=controller)
+
+    assert excinfo.value.reason == "http_429"
+    assert controller.is_paused is True
+
+
+def test_instaloader_fetch_fn_raises_safe_stop_on_checkpoint_signal_during_pagination(monkeypatch):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            def _gen():
+                if False:
+                    yield None
+                raise instaloader.exceptions.ConnectionException("checkpoint_required")
+
+            return _gen()
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+    controller = rate_controller.RateController(sleep_fn=lambda s: None)
+
+    with pytest.raises(rate_controller.SafeStop) as excinfo:
+        scraper.instaloader_fetch_fn("perfil_fake", cookies=None, rate_controller=controller)
+
+    assert excinfo.value.reason == "challenge"
+
+
+def test_instaloader_fetch_fn_raises_safe_stop_on_too_many_requests_resolving_profile(monkeypatch):
+    monkeypatch.setattr(scraper.instaloader, "Instaloader", FakeInstaloader)
+
+    def _raise_too_many_requests(context, username):
+        raise instaloader.exceptions.TooManyRequestsException("429 Too Many Requests")
+
+    monkeypatch.setattr(
+        scraper.instaloader.Profile, "from_username", staticmethod(_raise_too_many_requests)
+    )
+    controller = rate_controller.RateController(sleep_fn=lambda s: None)
+
+    with pytest.raises(rate_controller.SafeStop) as excinfo:
+        scraper.instaloader_fetch_fn("perfil_fake", cookies=None, rate_controller=controller)
+
+    assert excinfo.value.reason == "http_429"
+
+
 def test_scrape_profile_reraises_safe_stop_without_falling_back_to_cache_even_when_cache_exists():
     db_path = make_temp_db()
     try:
