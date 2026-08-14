@@ -332,6 +332,62 @@ def test_app_shows_safety_message_when_pipeline_reports_pausado_seguranca(monkey
     assert any(rate_controller.SAFETY_MESSAGE in value for value in warning_values)
 
 
+def test_app_hides_export_buttons_until_ver_relatorio_clicked():
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.text_input(key="username_input").set_value(f"perfil_ver_relatorio_{uuid.uuid4().hex}")
+    at.toggle(key="demo_mode_toggle").set_value(True)
+    at.button[0].click().run()
+
+    max_reruns = 50
+    for _ in range(max_reruns):
+        assert not at.exception
+        status = at.session_state["pipeline_state"].get("status")
+        if status != "rodando":
+            break
+        at.run()
+
+    assert at.session_state["pipeline_state"]["status"] == "concluido"
+    assert at.download_button == []
+    ver_relatorio_button = next(b for b in at.button if b.label == "Ver Relatório")
+
+    ver_relatorio_button.click().run()
+
+    assert not at.exception
+    assert len(at.download_button) >= 1
+
+
+def test_app_gerar_novo_relatorio_resets_screen_without_clearing_cache(monkeypatch):
+    from src import database
+
+    clear_cache_calls = []
+    monkeypatch.setattr(database, "clear_profile_cache", lambda username: clear_cache_calls.append(username))
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.text_input(key="username_input").set_value(f"perfil_gerar_novo_{uuid.uuid4().hex}")
+    at.toggle(key="demo_mode_toggle").set_value(True)
+    at.button[0].click().run()
+
+    max_reruns = 50
+    for _ in range(max_reruns):
+        assert not at.exception
+        status = at.session_state["pipeline_state"].get("status")
+        if status != "rodando":
+            break
+        at.run()
+
+    next(b for b in at.button if b.label == "Ver Relatório").click().run()
+    next(b for b in at.button if b.label == "Gerar novo relatório").click().run()
+
+    assert not at.exception
+    assert at.session_state["pipeline_state"]["status"] == "ocioso"
+    assert at.session_state["mostrar_relatorio"] is False
+    assert clear_cache_calls == []
+
+
 def test_run_pipeline_detects_sponsored_posts_in_demo_mode():
     """RF-09: em Modo Demonstração, ao menos uma publi de exemplo deve ser
     detectada nas legendas geradas localmente (prova de que o pipeline real

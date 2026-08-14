@@ -488,6 +488,8 @@ def _init_state():
         st.session_state.pipeline_state = {"status": "ocioso"}
     if "pipeline_thread" not in st.session_state:
         st.session_state.pipeline_thread = None
+    if "mostrar_relatorio" not in st.session_state:
+        st.session_state.mostrar_relatorio = False
 
 
 def _render_metric_cards(analysis):
@@ -763,6 +765,7 @@ def _start_pipeline_thread(username, window_days, demo_mode):
             # na UI via GEMINI_NAO_CONFIGURADO_MSG — nunca derruba o pipeline.
             gemini_client = None
     st.session_state.pipeline_state = {"status": "rodando", "etapa": "coleta", "progresso": 0.0}
+    st.session_state.mostrar_relatorio = False
     thread = threading.Thread(
         target=_run_pipeline,
         args=(username, window_days, demo_mode, gemini_client, st.session_state.pipeline_state),
@@ -863,7 +866,21 @@ def main():
         with col_right:
             _render_antifraude_card(analysis)
             _render_comentarios_card(analysis, state.get("gemini_configurado", False))
-        _render_export_buttons(analysis)
+
+        if not st.session_state.mostrar_relatorio:
+            st.success("Relatório pronto! Clique abaixo para liberar a exportação em HTML/PDF/JSON.")
+            if st.button("Ver Relatório"):
+                st.session_state.mostrar_relatorio = True
+                st.rerun()
+        else:
+            _render_export_buttons(analysis)
+            if st.button("Gerar novo relatório"):
+                # Limpa só o estado da tela, nunca o cache global (FINDER-003 §2.4) —
+                # quem quiser limpar o cache usa o botão "Limpar Cache e Re-analisar
+                # Perfil" no formulário, de forma explícita.
+                st.session_state.pipeline_state = {"status": "ocioso"}
+                st.session_state.mostrar_relatorio = False
+                st.rerun()
 
 
 main()
