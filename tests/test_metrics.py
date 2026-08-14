@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -146,3 +147,212 @@ def test_estimate_fake_followers_risk_never_exceeds_100():
     result = metrics.estimate_fake_followers_risk(engagement_rate=0.0, followers_count=5000, pod_index=1.0)
 
     assert result["value"] == 100.0
+
+
+# --- Contrato canônico de métricas e proveniência (Sprint 002, BENCHMARK-001.md §6/§7,
+# ISSUE-001.md §5.3/§5.4/§6.2) ---
+
+
+def test_calc_engagement_rate_by_followers_computes_mean_of_per_post_ratio_as_percent():
+    posts = [
+        {"likes_count": 100, "comments_count": 10},
+        {"likes_count": 50, "comments_count": 5},
+    ]
+
+    result = metrics.calc_engagement_rate_by_followers(posts, followers_count=1000)
+
+    assert result["value"] == 8.25
+    assert result["unit"] == "percent"
+    assert result["kind"] == "derived"
+    assert result["source"] == "local_scraper_sample"
+    assert result["confidence"] == "high"
+    assert result["denominator"] == "followers_count"
+    assert result["included_actions"] == ["likes", "comments"]
+    assert result["post_count"] == 2
+    assert result["status"] == "ok"
+    assert result["ressalvas"] == []
+
+
+def test_calc_engagement_rate_by_followers_empty_posts_returns_none_not_zero():
+    result = metrics.calc_engagement_rate_by_followers([], followers_count=1000)
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+    assert result["kind"] is None
+    assert result["confidence"] is None
+    assert result["post_count"] == 0
+    assert result["ressalvas"] != []
+
+
+def test_calc_engagement_rate_by_followers_zero_followers_returns_none_without_raising():
+    posts = [{"likes_count": 100, "comments_count": 10}]
+
+    result = metrics.calc_engagement_rate_by_followers(posts, followers_count=0)
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+
+
+def test_calc_engagement_rate_by_followers_missing_counts_treated_as_zero_without_raising():
+    posts = [{"likes_count": None, "comments_count": None}]
+
+    result = metrics.calc_engagement_rate_by_followers(posts, followers_count=1000)
+
+    assert result["value"] == 0.0
+    assert result["status"] == "ok"
+
+
+def test_calc_engagement_rate_by_reach_computes_total_interactions_over_total_reach():
+    posts = [
+        {"likes_count": 100, "comments_count": 10, "estimated_reach": 2000},
+        {"likes_count": 50, "comments_count": 5, "estimated_reach": 1000},
+    ]
+
+    result = metrics.calc_engagement_rate_by_reach(posts)
+
+    assert result["value"] == 5.5
+    assert result["unit"] == "percent"
+    assert result["kind"] == "derived"
+    assert result["source"] == "post_level_estimated_reach"
+    assert result["denominator"] == "estimated_reach"
+    assert result["included_actions"] == ["likes", "comments"]
+    assert result["post_count"] == 2
+    assert result["status"] == "ok"
+
+
+def test_calc_engagement_rate_by_reach_returns_none_when_no_post_has_reach_data():
+    posts = [{"likes_count": 100, "comments_count": 10}]
+
+    result = metrics.calc_engagement_rate_by_reach(posts)
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+    assert result["ressalvas"] != []
+
+
+def test_calc_engagement_rate_by_reach_empty_posts_never_raises():
+    result = metrics.calc_engagement_rate_by_reach([])
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+
+
+def test_calc_engagement_rate_by_reach_ignores_posts_without_reach_but_uses_the_ones_with_it():
+    posts = [
+        {"likes_count": 100, "comments_count": 10, "estimated_reach": 2000},
+        {"likes_count": 999, "comments_count": 999},
+    ]
+
+    result = metrics.calc_engagement_rate_by_reach(posts)
+
+    assert result["value"] == 5.5
+    assert result["post_count"] == 1
+
+
+def test_calc_engagement_rate_by_views_computes_total_interactions_over_total_views_for_reels():
+    posts = [
+        {"likes_count": 100, "comments_count": 10, "post_type": "reel", "views_count": 5000},
+        {"likes_count": 50, "comments_count": 5, "post_type": "reel", "views_count": 2000},
+        {"likes_count": 30, "comments_count": 3, "post_type": "photo"},
+    ]
+
+    result = metrics.calc_engagement_rate_by_views(posts)
+
+    assert result["value"] == (165 / 7000) * 100
+    assert result["kind"] == "derived"
+    assert result["source"] == "post_level_reel_views"
+    assert result["denominator"] == "views_count"
+    assert result["post_count"] == 2
+    assert result["status"] == "ok"
+
+
+def test_calc_engagement_rate_by_views_returns_none_when_no_reels_in_sample():
+    posts = [{"likes_count": 100, "comments_count": 10, "post_type": "photo"}]
+
+    result = metrics.calc_engagement_rate_by_views(posts)
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+
+
+def test_calc_engagement_rate_by_views_returns_none_when_reel_has_no_views_count():
+    posts = [{"likes_count": 100, "comments_count": 10, "post_type": "reel"}]
+
+    result = metrics.calc_engagement_rate_by_views(posts)
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+
+
+def test_calc_engagement_rate_by_views_empty_posts_never_raises():
+    result = metrics.calc_engagement_rate_by_views([])
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+
+
+def test_build_audit_report_has_canonical_metrics_and_provenance_shape():
+    posts = [{"likes_count": 100, "comments_count": 10}]
+
+    report = metrics.build_audit_report(posts, followers_count=1000)
+
+    assert set(report.keys()) == {"metrics", "provenance"}
+    assert set(report["metrics"].keys()) == {
+        "engagement_rate_by_followers",
+        "engagement_rate_by_reach",
+        "engagement_rate_by_views",
+    }
+    for metric_name, metric in report["metrics"].items():
+        assert set(metric.keys()) == {
+            "value",
+            "unit",
+            "kind",
+            "source",
+            "confidence",
+            "denominator",
+            "included_actions",
+            "post_count",
+            "status",
+            "ressalvas",
+        }
+
+    assert len(report["provenance"]) == 3
+    for entry in report["provenance"]:
+        assert set(entry.keys()) == {"field", "kind", "source", "confidence", "status"}
+        assert entry["field"] in report["metrics"]
+        assert entry["kind"] == report["metrics"][entry["field"]]["kind"]
+        assert entry["source"] == report["metrics"][entry["field"]]["source"]
+
+
+def test_build_audit_report_is_json_serializable():
+    posts = [{"likes_count": 100, "comments_count": 10}]
+
+    report = metrics.build_audit_report(posts, followers_count=1000)
+
+    json.dumps(report)  # não deve lançar exceção
+
+
+def test_build_audit_report_never_raises_on_empty_sample():
+    report = metrics.build_audit_report([], followers_count=0)
+
+    for metric in report["metrics"].values():
+        assert metric["value"] is None
+        assert metric["status"] == "indisponivel"
+
+
+def test_build_audit_report_computes_reach_and_views_when_data_is_present():
+    posts = [
+        {
+            "likes_count": 100,
+            "comments_count": 10,
+            "estimated_reach": 2000,
+            "post_type": "reel",
+            "views_count": 5000,
+        },
+    ]
+
+    report = metrics.build_audit_report(posts, followers_count=1000)
+
+    assert report["metrics"]["engagement_rate_by_followers"]["status"] == "ok"
+    assert report["metrics"]["engagement_rate_by_reach"]["status"] == "ok"
+    assert report["metrics"]["engagement_rate_by_views"]["status"] == "ok"

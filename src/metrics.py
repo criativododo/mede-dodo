@@ -2,6 +2,172 @@ from collections import defaultdict
 
 from src.scoring import get_influencer_tier
 
+# Contrato canônico de métricas e proveniência (Sprint 002 — BENCHMARK-001.md §6/§7,
+# ISSUE-001.md §5.3/§5.4/§6.2). Cada métrica é um objeto autodescritivo (value/kind/
+# source/confidence/ressalvas) em vez de um número solto, para que quem consome o
+# relatório saiba se o valor foi observado, derivado localmente, estimado ou vindo de
+# uma fonte externa — e para nunca confundir "não temos esse dado" com um 0 silencioso.
+_ENGAGEMENT_INCLUDED_ACTIONS = ["likes", "comments"]
+
+
+def _interactions(post):
+    return (post.get("likes_count") or 0) + (post.get("comments_count") or 0)
+
+
+def _unavailable_engagement_metric(source, denominator, post_count, ressalva):
+    return {
+        "value": None,
+        "unit": "percent",
+        "kind": None,
+        "source": source,
+        "confidence": None,
+        "denominator": denominator,
+        "included_actions": _ENGAGEMENT_INCLUDED_ACTIONS,
+        "post_count": post_count,
+        "status": "indisponivel",
+        "ressalvas": [ressalva],
+    }
+
+
+def calc_engagement_rate_by_followers(posts, followers_count):
+    """ER por seguidores (BENCHMARK-001.md §7.1, ISSUE-001.md §5.3): média de
+    ((likes + comments) / followers) * 100 por post — a taxa "clássica" de
+    ranking público (referência HypeAuditor). Retorna métrica "indisponivel"
+    (value=None) em vez de 0 quando não há posts ou seguidores na amostra."""
+    source = "local_scraper_sample"
+    denominator = "followers_count"
+
+    if not posts or not followers_count or followers_count <= 0:
+        return _unavailable_engagement_metric(
+            source,
+            denominator,
+            len(posts),
+            "Sem posts na amostra ou seguidores desconhecidos/zero — taxa por seguidores indisponível.",
+        )
+
+    ratios = [(_interactions(post) / followers_count) * 100 for post in posts]
+
+    return {
+        "value": sum(ratios) / len(ratios),
+        "unit": "percent",
+        "kind": "derived",
+        "source": source,
+        "confidence": "high",
+        "denominator": denominator,
+        "included_actions": _ENGAGEMENT_INCLUDED_ACTIONS,
+        "post_count": len(posts),
+        "status": "ok",
+        "ressalvas": [],
+    }
+
+
+def calc_engagement_rate_by_reach(posts):
+    """ER por alcance (BENCHMARK-001.md §7.1, ISSUE-001.md §5.4):
+    total_interactions / total_reach * 100, somado apenas sobre os posts da
+    amostra que têm `estimated_reach` (a coleta local atual, via
+    Instaloader/scraping público, não fornece alcance — esse dado exige
+    Instagram Insights autenticado). Nunca lança exceção; sem nenhum post
+    com alcance, a métrica volta "indisponivel"."""
+    source = "post_level_estimated_reach"
+    denominator = "estimated_reach"
+
+    posts_com_alcance = [post for post in posts if post.get("estimated_reach")]
+    total_reach = sum(post["estimated_reach"] for post in posts_com_alcance)
+
+    if not posts_com_alcance or not total_reach:
+        return _unavailable_engagement_metric(
+            source,
+            denominator,
+            0,
+            "Nenhum post da amostra possui alcance estimado — a coleta atual (scraping "
+            "público) não fornece esse dado; requer Instagram Insights autenticado.",
+        )
+
+    total_interactions = sum(_interactions(post) for post in posts_com_alcance)
+
+    return {
+        "value": (total_interactions / total_reach) * 100,
+        "unit": "percent",
+        "kind": "derived",
+        "source": source,
+        "confidence": "medium",
+        "denominator": denominator,
+        "included_actions": _ENGAGEMENT_INCLUDED_ACTIONS,
+        "post_count": len(posts_com_alcance),
+        "status": "ok",
+        "ressalvas": [],
+    }
+
+
+def calc_engagement_rate_by_views(posts, reel_post_types=("reel", "reels")):
+    """ER por views (BENCHMARK-001.md §7.1, ISSUE-001.md §5.4), restrita a
+    posts do tipo Reels: total_interactions / total_views * 100, somado só
+    sobre os Reels da amostra que têm `views_count`. A coleta local atual não
+    classifica `post_type` nem coleta `views_count`, então esta métrica fica
+    "indisponivel" até essa camada de coleta existir — nunca inventa 0."""
+    source = "post_level_reel_views"
+    denominator = "views_count"
+
+    reels_com_views = [
+        post
+        for post in posts
+        if post.get("post_type") in reel_post_types and post.get("views_count")
+    ]
+    total_views = sum(post["views_count"] for post in reels_com_views)
+
+    if not reels_com_views or not total_views:
+        return _unavailable_engagement_metric(
+            source,
+            denominator,
+            0,
+            "Nenhum post do tipo Reels com views coletado na amostra — a coleta atual "
+            "não classifica post_type/views_count.",
+        )
+
+    total_interactions = sum(_interactions(post) for post in reels_com_views)
+
+    return {
+        "value": (total_interactions / total_views) * 100,
+        "unit": "percent",
+        "kind": "derived",
+        "source": source,
+        "confidence": "medium",
+        "denominator": denominator,
+        "included_actions": _ENGAGEMENT_INCLUDED_ACTIONS,
+        "post_count": len(reels_com_views),
+        "status": "ok",
+        "ressalvas": [],
+    }
+
+
+def build_audit_report(posts, followers_count):
+    """Contrato canônico de auditoria (BENCHMARK-001.md §6, ISSUE-001.md §6.2),
+    restrito nesta primeira fase da Sprint 002 às 3 taxas de engajamento
+    formais do benchmark. Cada métrica em `metrics` já é autodescritiva
+    (value/kind/source/confidence/ressalvas); `provenance` resume a origem de
+    cada campo num formato tabular, para auditoria rápida sem percorrer o
+    objeto inteiro. Retrocompatível: não substitui nem altera
+    `scoring.calc_engagement_rate` (consumido por `app.py`/`src/exporter.py`
+    como `analysis["engagement_rate"]`), é um contrato adicional."""
+    metrics_report = {
+        "engagement_rate_by_followers": calc_engagement_rate_by_followers(posts, followers_count),
+        "engagement_rate_by_reach": calc_engagement_rate_by_reach(posts),
+        "engagement_rate_by_views": calc_engagement_rate_by_views(posts),
+    }
+
+    provenance = [
+        {
+            "field": field,
+            "kind": metric["kind"],
+            "source": metric["source"],
+            "confidence": metric["confidence"],
+            "status": metric["status"],
+        }
+        for field, metric in metrics_report.items()
+    ]
+
+    return {"metrics": metrics_report, "provenance": provenance}
+
 
 def calc_average_engagement(posts):
     """

@@ -203,16 +203,48 @@ Gemini real neste ambiente.
 3. Calibração dos pesos do Score DODÔ com dados reais de campanha (hoje é heurística).
 
 ## Pendências (2026-08-13)
-1. **Merge do branch `worktree-pacing-anti-ban-progresso` para `main` não realizado nesta
-   sessão.** O `git merge-tree --write-tree main worktree-pacing-anti-ban-progresso` (rodado
-   sem checkout, só leitura de objetos) confirma merge limpo, sem conflitos. A sessão que
-   fez esse trabalho rodou isolada dentro do próprio worktree — o harness bloqueia
-   operações git desse worktree contra o checkout compartilhado de `main`, e este projeto
-   não tem `remote` configurado para viabilizar um push+PR. Para concluir: a partir do
-   checkout principal (`/Users/danielperrut/0. PROJETO/mede-dodo`), rodar
-   `git merge worktree-pacing-anti-ban-progresso`, depois `.venv/bin/python -m pytest
-   tests/` para confirmar os 225 testes, e então `git worktree remove
-   .claude/worktrees/pacing-anti-ban-progresso`.
+1. ~~Merge do branch `worktree-pacing-anti-ban-progresso` para `main`~~ — **concluído**
+   em sessão subsequente (2026-08-13): merge fast-forward em `main` (`8e25363`), 225/225
+   testes validados no checkout principal, worktree removido com `git worktree remove`.
 2. `RealGeminiClient` (SDK `google-genai`) segue sem validação contra a API real do Gemini
    neste ambiente (sem `GEMINI_API_KEY`) — mocks cobrem 100% do contrato, mas não uma
    chamada de rede real ao endpoint atual.
+
+## Sprint 002 — Contrato canônico de métricas e proveniência (2026-08-13)
+Primeira fase da Sprint 002 (`SPRINT-002/BENCHMARK-001.md` §6/§7, `SPRINT-002/ISSUE-001.md`
+§5.3/§5.4/§6.2, `SPRINT-002/HANDOFF-SPRINT-002.md`), versionados nesta sessão junto com
+`FINDER-0001.md`, `SPRINT-002/FINDER-001.md`, `SPRINT-002/FINDER-002.md` e
+`SPRINT-002/FINDER-003.md` (eram documentação de planejamento pendente, só na raiz do
+checkout principal, nunca commitada).
+
+- **`src/metrics.py`** ganhou o contrato canônico de auditoria: `build_audit_report(posts,
+  followers_count)` retorna `{"metrics": {...}, "provenance": [...]}`, com as 3 taxas de
+  engajamento formais do benchmark (`calc_engagement_rate_by_followers`,
+  `calc_engagement_rate_by_reach`, `calc_engagement_rate_by_views`). Cada métrica é um
+  objeto autodescritivo — `value`, `unit`, `kind` (`derived`/`None` quando indisponível —
+  ainda não há caso `observed`/`estimated`/`source_estimate` neste contrato inicial,
+  restrito a taxas de engajamento derivadas), `source`, `confidence`, `denominator`,
+  `included_actions`, `post_count`, `status` (`ok`/`indisponivel`) e `ressalvas` — em vez
+  de um número solto, para nunca confundir "sem dado" com `0` silencioso (BENCHMARK-001.md
+  §6: "o contrato também precisa distinguir `null` de zero").
+  - `engagement_rate_by_followers`: média de `(likes + comments) / followers * 100` por
+    post — mesma fórmula de `scoring.calc_engagement_rate`, porém como percentual e com
+    proveniência; indisponível sem posts ou com `followers_count <= 0`.
+  - `engagement_rate_by_reach`: `total_interactions / total_reach * 100`, somando só os
+    posts da amostra com `estimated_reach` — a coleta local (Instaloader/scraping público)
+    não fornece alcance hoje, então esta métrica fica `indisponivel` em qualquer auditoria
+    real até existir uma fonte de alcance (Instagram Insights autenticado).
+  - `engagement_rate_by_views`: `total_interactions / total_views * 100`, restrita a posts
+    com `post_type` em `("reel", "reels")` e `views_count` presente — a coleta atual
+    também não classifica `post_type`/`views_count`, então fica `indisponivel` até essa
+    camada existir.
+  - **Retrocompatibilidade preservada**: `scoring.calc_engagement_rate` (consumido por
+    `app.py`/`src/exporter.py` como `analysis["engagement_rate"]`, um float simples) não
+    foi tocado — o novo contrato é aditivo, ainda não plugado no pipeline/UI (isso é
+    trabalho de uma fase seguinte da Sprint 002, fora do escopo desta entrega).
+- **Testes**: +16 em `tests/test_metrics.py` cobrindo formato do contrato JSON
+  (`json.dumps` sem exceção), as 3 fórmulas com valores conhecidos, preservação de
+  `denominator`/`included_actions`/`post_count` e retorno `None`/`status="indisponivel"`
+  para amostra vazia, seguidores zerados, ausência de `estimated_reach` e ausência de
+  Reels com `views_count` — nunca lança exceção. Suíte completa: 225 → **241 testes,
+  100% verde** (`.venv/bin/python -m pytest tests/`).
