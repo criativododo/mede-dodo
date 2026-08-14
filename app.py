@@ -550,6 +550,51 @@ def _render_metric_cards(analysis):
     col9.caption("Comentários com conteúdo próprio, descontados emojis soltos, elogio genérico e spam/bot.")
 
 
+_PROVENANCE_ROW_LABELS = {
+    "engagement_rate_by_followers": "Por seguidores",
+    "engagement_rate_by_reach": "Por alcance",
+    "engagement_rate_by_views": "Por views de Reels",
+}
+_PROVENANCE_STATUS_LABELS = {"ok": "Disponível", "indisponivel": "Indisponível"}
+_PROVENANCE_KIND_LABELS = {"derived": "Derivado", "estimated": "Estimado"}
+
+
+def _render_provenance_card(analysis):
+    # Sprint 002 Fase 3 (BENCHMARK-001.md §5.2): espelha na UI o mesmo
+    # contrato canônico já exposto no exportador (src/exporter.py
+    # _provenance_rows) — cada taxa de engajamento mostra se está disponível
+    # nesta amostra, qual o denominador e o tipo de cálculo, para o usuário
+    # nunca confundir "sem dado" com "engajamento zero".
+    st.subheader("Proveniência e Escopo das Métricas")
+    audit_report = analysis.get("audit_report") or {}
+    metrics_map = audit_report.get("metrics") or {}
+    if not metrics_map:
+        st.caption("Nenhum dado de proveniência disponível para esta análise.")
+        return
+
+    for field, label in _PROVENANCE_ROW_LABELS.items():
+        metric = metrics_map.get(field) or {}
+        status = metric.get("status") or "indisponivel"
+        status_label = _PROVENANCE_STATUS_LABELS.get(status, "Indisponível")
+        valor = f"{metric['value']:.2f}%" if metric.get("value") is not None else "N/D"
+        denominador = metric.get("denominator") or "N/D"
+        tipo = _PROVENANCE_KIND_LABELS.get(metric.get("kind"), "N/D")
+        fonte = metric.get("source") or "N/D"
+
+        st.markdown(f"**{label}** — {status_label} — {valor}")
+        st.caption(f"Denominador: {denominador} · Tipo: {tipo} · Fonte: {fonte}")
+        for ressalva in metric.get("ressalvas") or []:
+            st.caption(f"⚠️ {ressalva}")
+
+    views_metric = metrics_map.get("engagement_rate_by_views") or {}
+    if views_metric.get("status") == "ok":
+        st.markdown("**Reels na amostra**")
+        st.caption(
+            f"{views_metric.get('post_count', 0)} vídeo(s)/Reels com views coletadas — "
+            f"taxa de engajamento por views: {views_metric['value']:.2f}%."
+        )
+
+
 def _render_demografia_card(analysis):
     st.subheader("Demografia da audiência")
     demografia = analysis["demografia"]
@@ -878,6 +923,7 @@ def main():
         if state.get("demo_mode"):
             st.info("Resultado gerado em MODO DEMONSTRAÇÃO — dados fictícios, apenas para validar o pipeline fim-a-fim.")
         _render_metric_cards(analysis)
+        _render_provenance_card(analysis)
         _render_campaign_insights_section(analysis, state.get("gemini_configurado", False))
         col_left, col_right = st.columns(2)
         with col_left:

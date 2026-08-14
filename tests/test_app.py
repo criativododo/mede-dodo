@@ -256,6 +256,46 @@ def test_app_demo_mode_renders_campaign_insights_section_without_gemini_api_key(
     assert all(0.0 <= post["post_score"] <= 1.0 for post in campaign_insights["top_3_by_quality"])
 
 
+def test_app_renders_provenance_card_with_status_per_engagement_rate(monkeypatch):
+    """Card 'Proveniência e Escopo das Métricas' (Sprint 002 Fase 3,
+    BENCHMARK-001.md §5.2): em Modo Demonstração, engagement_rate_by_followers
+    e engagement_rate_by_views (há Reels na amostra demo) devem aparecer como
+    'Disponível', e engagement_rate_by_reach (demo não gera estimated_reach)
+    como 'Indisponível' — prova de que os badges refletem o status real do
+    audit_report, não um valor fixo."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    assert not at.exception
+
+    at.text_input(key="username_input").set_value(f"perfil_demo_provenance_{uuid.uuid4().hex}")
+    at.toggle(key="demo_mode_toggle").set_value(True)
+    at.button[0].click().run()
+
+    max_reruns = 50
+    for _ in range(max_reruns):
+        assert not at.exception
+        status = at.session_state["pipeline_state"].get("status")
+        if status != "rodando":
+            break
+        at.run()
+
+    assert not at.exception
+    assert at.session_state["pipeline_state"]["status"] == "concluido"
+
+    subheader_values = [s.value for s in at.subheader]
+    assert "Proveniência e Escopo das Métricas" in subheader_values
+
+    markdown_values = " ".join(m.value for m in at.markdown)
+    assert "Por seguidores" in markdown_values and "Disponível" in markdown_values
+    assert "Por alcance" in markdown_values and "Indisponível" in markdown_values
+    assert "Por views de Reels" in markdown_values
+
+    caption_values = " ".join(c.value for c in at.caption)
+    assert "vídeo" in caption_values.lower() or "reel" in caption_values.lower()
+
+
 def test_app_renders_new_audience_metric_cards_when_gemini_configured(monkeypatch):
     """Quando o Gemini está configurado, a UI deve exibir os agregados de
     audiência (taxa de comentários qualificados, distribuição de intenção de
@@ -408,6 +448,17 @@ def test_run_pipeline_detects_sponsored_posts_in_demo_mode():
     assert len(publis) >= 1
     assert all("termos" in item and item["termos"] for item in publis)
     assert all(item["link"] is None or item["link"].startswith("https://www.instagram.com/p/") for item in publis)
+
+
+def test_render_provenance_card_never_raises_without_audit_report():
+    """analyses geradas antes da Sprint 002 Fase 2 (ou qualquer falha ao
+    computar build_audit_report) não têm `audit_report` — o card precisa
+    degradar graciosamente em vez de lançar KeyError/TypeError."""
+    import app
+
+    app._render_provenance_card({"username": "perfil_sem_audit_report"})
+    app._render_provenance_card({"username": "perfil_audit_report_vazio", "audit_report": {}})
+    app._render_provenance_card({"username": "perfil_metrics_vazio", "audit_report": {"metrics": {}}})
 
 
 def test_run_pipeline_attaches_canonical_audit_report_with_reels_views_in_demo_mode():

@@ -1,5 +1,6 @@
 from collections import defaultdict
 
+from src.filters import is_shallow_comment
 from src.scoring import get_influencer_tier
 
 # Contrato canônico de métricas e proveniência (Sprint 002 — BENCHMARK-001.md §6/§7,
@@ -142,19 +143,221 @@ def calc_engagement_rate_by_views(posts):
     }
 
 
+def _extract_comments(posts):
+    """Achata post.raw.comments de todos os posts da amostra, anexando
+    post_id a cada comentário (o mesmo formato usado por app.py para montar
+    all_comments_flat). Nunca lança exceção: posts sem raw/comments viram
+    lista vazia."""
+    all_comments = []
+    for post in posts:
+        raw_comments = (post.get("raw") or {}).get("comments", []) or []
+        for comment in raw_comments:
+            all_comments.append({**comment, "post_id": post.get("post_id")})
+    return all_comments
+
+
+def classify_pod_risk(pod_index_percent):
+    """Classificação de risco do pod_index (BENCHMARK-001.md §4.3/§7.2):
+    'baixo' < 10%, 'médio' 10-25%, 'alto' > 25%."""
+    if pod_index_percent > 25:
+        return "alto"
+    if pod_index_percent >= 10:
+        return "medio"
+    return "baixo"
+
+
+def calc_pod_index_metric(posts):
+    """pod_index (BENCHMARK-001.md §4.3) no formato do contrato canônico:
+    reaproveita `calc_pod_index` sobre os comentaristas extraídos de
+    post.raw.comments, expondo o valor em percentual, os top repetidores e a
+    classificação de risco. 'indisponivel' quando a amostra não tem nenhum
+    comentário coletado."""
+    metrics_posts = [
+        {
+            "post_id": post.get("post_id"),
+            "commenters": [c.get("username") for c in (post.get("raw") or {}).get("comments", []) or []],
+        }
+        for post in posts
+    ]
+    pod_result = calc_pod_index(metrics_posts)
+
+    if not pod_result["total_comentarios"]:
+        return {
+            "value": None,
+            "unit": "percent",
+            "kind": None,
+            "source": "local_comment_sample",
+            "confidence": None,
+            "status": "indisponivel",
+            "top_repetidores": {},
+            "risk": None,
+            "ressalvas": ["Sem comentários coletados na amostra — pod_index indisponível."],
+        }
+
+    pod_index_percent = pod_result["pod_index"] * 100
+
+    return {
+        "value": pod_index_percent,
+        "unit": "percent",
+        "kind": "derived",
+        "source": "local_comment_sample",
+        "confidence": "medium",
+        "status": "ok",
+        "top_repetidores": pod_result["top_repetidores"],
+        "risk": classify_pod_risk(pod_index_percent),
+        "ressalvas": [],
+    }
+
+
+def calc_shallow_ratio_metric(posts):
+    """shallow_ratio (BENCHMARK-001.md §4.3): proporção de comentários rasos
+    (filters.is_shallow_comment) descartados localmente antes de qualquer
+    envio ao Gemini (DUMMY.md #2). 'indisponivel' sem comentários na
+    amostra."""
+    comments = _extract_comments(posts)
+    total = len(comments)
+
+    if not total:
+        return {
+            "value": None,
+            "unit": "percent",
+            "kind": None,
+            "source": "local_comment_sample",
+            "confidence": None,
+            "status": "indisponivel",
+            "shallow_count": 0,
+            "total_count": 0,
+            "ressalvas": ["Sem comentários coletados na amostra — shallow_ratio indisponível."],
+        }
+
+    shallow_count = sum(1 for comment in comments if is_shallow_comment(comment.get("texto", "")))
+
+    return {
+        "value": (shallow_count / total) * 100,
+        "unit": "percent",
+        "kind": "derived",
+        "source": "local_comment_sample",
+        "confidence": "high",
+        "status": "ok",
+        "shallow_count": shallow_count,
+        "total_count": total,
+        "ressalvas": [],
+    }
+
+
+def calc_creator_response_rate_metric(posts):
+    """creator_response_rate (BENCHMARK-001.md §4.3): proporção de
+    comentários que receberam resposta da própria criadora, a partir do
+    sinal `respondido` já populado por src/scraper.py (real) ou pelo Modo
+    Demonstração. 'indisponivel' sem comentários na amostra."""
+    comments = _extract_comments(posts)
+    total = len(comments)
+
+    if not total:
+        return {
+            "value": None,
+            "unit": "percent",
+            "kind": None,
+            "source": "local_comment_sample",
+            "confidence": None,
+            "status": "indisponivel",
+            "responded_count": 0,
+            "total_count": 0,
+            "ressalvas": ["Sem comentários coletados na amostra — taxa de resposta da criadora indisponível."],
+        }
+
+    responded_count = sum(1 for comment in comments if comment.get("respondido"))
+
+    return {
+        "value": (responded_count / total) * 100,
+        "unit": "percent",
+        "kind": "derived",
+        "source": "local_comment_sample",
+        "confidence": "medium",
+        "status": "ok",
+        "responded_count": responded_count,
+        "total_count": total,
+        "ressalvas": [
+            "'respondido' é observado apenas quando a coleta identifica reply da "
+            "própria criadora no post — não distingue resposta pública de privada."
+        ],
+    }
+
+
+def calc_audience_authenticity_signal(engagement_by_followers_metric, followers_count, pod_index_metric):
+    """audience_authenticity_signal (BENCHMARK-001.md §4.3/§7.2): sinal
+    probabilístico composto (`is_estimated=True`) que reaproveita
+    `estimate_fake_followers_risk` sobre o par (déficit de engajamento por
+    seguidores, pod_index) já calculados no próprio audit_report. NÃO é um
+    detector de seguidores falsos equivalente a ferramentas comerciais —
+    a ressalva explícita disso vai sempre junto do valor. 'indisponivel'
+    quando o pod_index de origem também está indisponível (amostra sem
+    comentários), para não fabricar um sinal sem nenhum lastro na
+    audiência."""
+    if pod_index_metric["value"] is None:
+        return {
+            "value": None,
+            "unit": "percent",
+            "kind": None,
+            "source": "local_heuristic_v1",
+            "confidence": None,
+            "status": "indisponivel",
+            "is_estimated": True,
+            "method": None,
+            "ressalvas": [
+                "Sem comentários coletados na amostra — depende do pod_index, que "
+                "também está indisponível."
+            ],
+        }
+
+    pod_index_ratio = pod_index_metric["value"] / 100
+    engagement_value = engagement_by_followers_metric["value"]
+    engagement_ratio = (engagement_value / 100) if engagement_value is not None else 0.0
+
+    estimate = estimate_fake_followers_risk(engagement_ratio, followers_count, pod_index_ratio)
+
+    return {
+        "value": estimate["value"],
+        "unit": "percent",
+        "kind": "estimated",
+        "source": "local_heuristic_v1",
+        "confidence": estimate["confidence"],
+        "status": "ok",
+        "is_estimated": True,
+        "method": estimate["method"],
+        "ressalvas": [
+            "Estimativa heurística local — NÃO é um detector de seguidores falsos "
+            "equivalente a ferramentas comerciais (Modash/HypeAuditor); não deve "
+            "ser lida como percentual definitivo de audiência inautêntica."
+        ],
+    }
+
+
 def build_audit_report(posts, followers_count):
-    """Contrato canônico de auditoria (BENCHMARK-001.md §6, ISSUE-001.md §6.2),
-    restrito nesta primeira fase da Sprint 002 às 3 taxas de engajamento
-    formais do benchmark. Cada métrica em `metrics` já é autodescritiva
-    (value/kind/source/confidence/ressalvas); `provenance` resume a origem de
-    cada campo num formato tabular, para auditoria rápida sem percorrer o
-    objeto inteiro. Retrocompatível: não substitui nem altera
+    """Contrato canônico de auditoria (BENCHMARK-001.md §6/§7, ISSUE-001.md
+    §6.2). Cada métrica em `metrics` já é autodescritiva (value/kind/source/
+    confidence/ressalvas); `provenance` resume a origem de cada campo num
+    formato tabular, para auditoria rápida sem percorrer o objeto inteiro.
+    Sprint 002 Fase 3 acrescenta a decomposição de qualidade da audiência
+    (pod_index/shallow_ratio/creator_response_rate/
+    audience_authenticity_signal — BENCHMARK-001.md §4.3/§7.2) às 3 taxas de
+    engajamento da Fase 1/2. Retrocompatível: não substitui nem altera
     `scoring.calc_engagement_rate` (consumido por `app.py`/`src/exporter.py`
-    como `analysis["engagement_rate"]`), é um contrato adicional."""
+    como `analysis["engagement_rate"]`) nem `analysis["antifraude"]`, é um
+    contrato adicional."""
+    engagement_by_followers = calc_engagement_rate_by_followers(posts, followers_count)
+    pod_index_metric = calc_pod_index_metric(posts)
+
     metrics_report = {
-        "engagement_rate_by_followers": calc_engagement_rate_by_followers(posts, followers_count),
+        "engagement_rate_by_followers": engagement_by_followers,
         "engagement_rate_by_reach": calc_engagement_rate_by_reach(posts),
         "engagement_rate_by_views": calc_engagement_rate_by_views(posts),
+        "pod_index": pod_index_metric,
+        "shallow_ratio": calc_shallow_ratio_metric(posts),
+        "creator_response_rate": calc_creator_response_rate_metric(posts),
+        "audience_authenticity_signal": calc_audience_authenticity_signal(
+            engagement_by_followers, followers_count, pod_index_metric
+        ),
     }
 
     provenance = [

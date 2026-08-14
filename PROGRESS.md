@@ -299,3 +299,69 @@ detecção de formato de post/Reels na coleta.
   disponível, e o cache SQLite reflete o mesmo relatório), +5 em `tests/test_exporter.py`
   (seção de proveniência presente/ausente em HTML e PDF). Suíte completa: 241 → **255
   testes, 100% verde** (`.venv/bin/python -m pytest tests/`).
+
+## Sprint 002 — Fase 3: card de proveniência na UI e decomposição de autenticidade (2026-08-13)
+Terceira fase da Sprint 002 (branch `worktree-sprint-002-fase3-provenience-ui`, criado a
+partir do merge fast-forward da Fase 2 em `main`). Fecha o ciclo "contrato canônico → cache
+→ exportador → UI" iniciado na Fase 1, e decompõe os sinais de autenticidade da audiência
+que antes só existiam soltos em `analysis["antifraude"]` (`app.py`) no mesmo contrato
+autodescritivo do `audit_report`.
+
+- **Merge & limpeza**: `worktree-sprint-002-fase2-reels-exportador` mesclado em `main`
+  (fast-forward, `39483a8`), suíte validada (255/255) antes e depois, worktree removido com
+  `git worktree remove`. O branch em si foi preservado (só a worktree foi removida) —
+  já está 100% contido em `main`.
+- **`iniciar_app.command`** — já existia na raiz desde a Fase 2 (ver entrega de 2026-08-13
+  acima); endurecido nesta sessão com `set -Eeuo pipefail` e `exec` na chamada final do
+  Streamlit (substitui o processo do shell em vez de deixar um processo bash pendurado).
+  Nenhum script duplicado/antigo de inicialização encontrado na raiz ou subpastas — só
+  existia essa versão.
+- **`src/metrics.py`** — `build_audit_report` ganhou 4 novos campos em `metrics`, além das 3
+  taxas de engajamento (BENCHMARK-001.md §4.3/§7.2), reaproveitando os comentários já
+  presentes em `post.raw.comments` (o mesmo formato que `app.py` já usa para montar
+  `all_comments_flat`), sem exigir nenhum parâmetro novo em `build_audit_report(posts,
+  followers_count)`:
+  - `pod_index`: reaproveita `calc_pod_index`, expõe o valor em percentual, `top_repetidores`
+    e uma classificação de risco (`classify_pod_risk`: "baixo" < 10%, "médio" 10-25%, "alto"
+    > 25%). `indisponivel` sem nenhum comentário coletado na amostra.
+  - `shallow_ratio`: proporção de comentários classificados como rasos por
+    `filters.is_shallow_comment` (emoji solto, elogio genérico, spam/bot) — os mesmos
+    descartados localmente antes de qualquer envio ao Gemini (DUMMY.md #2).
+  - `creator_response_rate`: proporção de comentários com o sinal `respondido=True` (já
+    populado por `src/scraper.py` em coleta real e pelo Modo Demonstração).
+  - `audience_authenticity_signal`: sinal probabilístico composto (`is_estimated=True`),
+    reaproveitando `estimate_fake_followers_risk` sobre o par (déficit do
+    `engagement_rate_by_followers` canônico vs. benchmark do porte, `pod_index` do próprio
+    relatório) — nunca um detector de seguidores falsos equivalente a ferramentas
+    comerciais, ressalva explícita sempre presente. `indisponivel` quando o `pod_index` de
+    origem também está indisponível, para não fabricar um sinal sem nenhum lastro na
+    audiência.
+  - Cada um dos 4 campos segue o mesmo envelope-base das taxas de engajamento (`value`,
+    `unit`, `kind`, `source`, `confidence`, `status`, `ressalvas`), com campos extras
+    próprios (`top_repetidores`/`risk`, `shallow_count`/`total_count`,
+    `responded_count`/`total_count`, `is_estimated`/`method`). `provenance` passou de 3 para
+    7 entradas. **Retrocompatível**: `analysis["antifraude"]` (`app.py`) e a seção de
+    proveniência do exportador (que só lê as 3 taxas de engajamento por nome de campo fixo)
+    não foram alterados nem quebrados.
+  - **Testes**: +11 em `tests/test_metrics.py` (classificação de risco do pod, as 4 métricas
+    novas isoladamente — caso disponível e indisponível — e o novo formato estrutural do
+    `audit_report` com 7 campos).
+- **`app.py`** — novo card "Proveniência e Escopo das Métricas" (`_render_provenance_card`,
+  chamado logo após `_render_metric_cards`), consumindo `analysis.get("audit_report", {})`:
+  uma linha por taxa de engajamento (seguidores/alcance/views de Reels) com status
+  ("Disponível"/"Indisponível"), valor, denominador, tipo de cálculo e fonte, mais as
+  ressalvas quando existirem; bloco adicional "Reels na amostra" (contagem de vídeos com
+  views coletadas + taxa de engajamento por views) só aparece quando
+  `engagement_rate_by_views` está disponível. Degrada graciosamente (sem lançar exceção)
+  quando `audit_report`/`metrics` estão ausentes ou vazios — cobre tanto relatórios
+  antigos (pré-Sprint-002 Fase 2) quanto qualquer falha ao computar o relatório.
+  - **Testes**: +1 `AppTest` fim a fim (Modo Demonstração: seguidores e views aparecem
+    "Disponível", alcance aparece "Indisponível" — a demo não gera `estimated_reach`) +1
+    chamada direta a `_render_provenance_card` com `analysis` sem `audit_report`/vazio,
+    provando que não lança exceção.
+- **Suíte completa**: 255 → **268 testes, 100% verde** (`.venv/bin/python -m pytest
+  tests/`), validada no checkout principal após o merge desta fase.
+- Verificação visual em navegador real não foi possível nesta sessão (ambiente de background
+  sem extensão Chrome conectada) — a cobertura via `AppTest` acima valida o texto exato
+  renderizado (subheader, markdown, captions), mas fica como pendência para validação visual
+  manual antes de considerar o card "aprovado" do ponto de vista de design.
