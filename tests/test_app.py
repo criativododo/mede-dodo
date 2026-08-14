@@ -247,8 +247,8 @@ def test_app_demo_mode_renders_campaign_insights_section_without_gemini_api_key(
     assert "Insights acionáveis de campanha" in subheader_values
 
     markdown_values = [m.value for m in at.markdown]
-    assert any("Top 3 por alcance/volume" in v for v in markdown_values)
-    assert any("Top 3 por qualidade/conversão" in v for v in markdown_values)
+    assert any("Posts de maior repercussão" in v for v in markdown_values)
+    assert any("Posts com melhor sinal de conversão" in v for v in markdown_values)
 
     campaign_insights = at.session_state["pipeline_state"]["analysis"]["campaign_insights"]
     assert campaign_insights is not None
@@ -257,11 +257,13 @@ def test_app_demo_mode_renders_campaign_insights_section_without_gemini_api_key(
 
 
 def test_app_demo_mode_renders_content_affinity_cards(monkeypatch):
-    """Sprint 002 Fase 4: os cards "Top 3 Posts", "Hashtags populares" e
-    "Menções de marcas" devem renderizar de fato na tela (via AppTest, não só
-    chamada direta da função) ao final de um fluxo real de Modo
-    Demonstração, já que demo_fetch_fn sempre gera posts patrocinados com
-    hashtags e menções (i % 3 == 0, determinístico)."""
+    """Sprint 002 SPEC-001 §6.6: os cards "Posts de maior repercussão"
+    (ex-"Top 3 Posts"/"Top 3 por alcance/volume"), "Hashtags populares" e
+    "Parcerias identificadas" (com menções de marcas, ex-"Menções de marcas")
+    devem renderizar de fato na tela (via AppTest, não só chamada direta da
+    função) ao final de um fluxo real de Modo Demonstração, já que
+    demo_fetch_fn sempre gera posts patrocinados com hashtags e menções
+    (i % 3 == 0, determinístico)."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     at = AppTest.from_file(APP_PATH)
@@ -283,10 +285,13 @@ def test_app_demo_mode_renders_content_affinity_cards(monkeypatch):
     assert not at.exception
     assert at.session_state["pipeline_state"]["status"] == "concluido"
 
-    subheader_values = [s.value for s in at.subheader]
-    assert "Top 3 Posts" in subheader_values
-    assert "Hashtags populares" in subheader_values
-    assert "Menções de marcas" in subheader_values
+    markdown_values = [m.value for m in at.markdown]
+    assert any("Posts de maior repercussão" in v for v in markdown_values)
+    assert any("Hashtags populares" in v for v in markdown_values)
+    assert any("Parcerias identificadas" in v for v in markdown_values)
+
+    caption_values = " ".join(c.value for c in at.caption)
+    assert "menç" in caption_values.lower()
 
 
 def test_app_renders_provenance_card_with_status_per_engagement_rate(monkeypatch):
@@ -366,11 +371,10 @@ def test_app_renders_new_audience_metric_cards_when_gemini_configured(monkeypatc
     markdown_values = " ".join(m.value for m in at.markdown)
     assert "Distribuição de intenção de compra" in markdown_values
     assert "Sentimento dos comentários" in markdown_values
-    assert "Faixa etária predominante da audiência" in markdown_values
+    assert "Faixa etária predominante" in markdown_values
     assert "18-24" in markdown_values
 
-    metric_labels = [m.label for m in at.metric]
-    assert any("qualificados" in label.lower() for label in metric_labels)
+    assert "sinal útil" in markdown_values.lower()
 
 
 def test_app_shows_safety_message_when_pipeline_reports_pausado_seguranca(monkeypatch):
@@ -634,36 +638,37 @@ def test_run_pipeline_attaches_gender_and_region_distribution_with_coverage_in_d
     assert region_metric["unit"] == "percent"
 
 
-def test_render_top_posts_card_never_raises_without_audit_report():
+def test_render_posts_maior_repercussao_never_raises_without_audit_report():
     import app
 
-    app._render_top_posts_card({"username": "perfil_sem_audit_report"})
-    app._render_top_posts_card({"username": "perfil_audit_report_vazio", "audit_report": {}})
-    app._render_top_posts_card({"username": "perfil_metrics_vazio", "audit_report": {"metrics": {}}})
+    app._render_posts_maior_repercussao({"username": "perfil_sem_audit_report"}, None)
+    app._render_posts_maior_repercussao({"username": "perfil_audit_report_vazio", "audit_report": {}}, None)
+    app._render_posts_maior_repercussao({"username": "perfil_metrics_vazio", "audit_report": {"metrics": {}}}, None)
 
 
-def test_render_popular_tags_card_never_raises_without_audit_report():
+def test_render_hashtags_populares_never_raises_without_audit_report():
     import app
 
-    app._render_popular_tags_card({"username": "perfil_sem_audit_report"})
-    app._render_popular_tags_card({"username": "perfil_metrics_vazio", "audit_report": {"metrics": {}}})
+    app._render_hashtags_populares({"username": "perfil_sem_audit_report"})
+    app._render_hashtags_populares({"username": "perfil_metrics_vazio", "audit_report": {"metrics": {}}})
 
 
-def test_render_brand_mentions_card_never_raises_without_audit_report():
+def test_render_parcerias_identificadas_never_raises_without_audit_report():
     import app
 
-    app._render_brand_mentions_card({"username": "perfil_sem_audit_report"})
-    app._render_brand_mentions_card({"username": "perfil_metrics_vazio", "audit_report": {"metrics": {}}})
+    app._render_parcerias_identificadas({"username": "perfil_sem_audit_report"})
+    app._render_parcerias_identificadas({"username": "perfil_metrics_vazio", "audit_report": {"metrics": {}}})
 
 
-def test_render_demografia_card_never_raises_without_audit_report():
+def test_render_audience_profile_never_raises_without_audit_report():
     import app
 
     analysis = {
         "username": "perfil_sem_audit_report",
         "demografia": {"genero_predominante": "indeterminado", "genero_pct": {}, "regioes": []},
     }
-    app._render_demografia_card(analysis)
+    app._render_audience_profile(analysis, False)
+    app._render_audience_profile(analysis, True)
 
 
 def test_run_pipeline_returns_proportional_region_breakdown_and_handles_prefixed_gender_in_real_mode(monkeypatch):

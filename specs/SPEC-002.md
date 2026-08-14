@@ -1,6 +1,6 @@
-# SPEC-001: Refatoração editorial da tela de relatório do métricaDODÔ
+# SPEC-002: Refatoração editorial da tela de relatório do métricaDODÔ
 
-**Status:** proposta para aprovação  
+**Status:** implementada (Sprint 002, UI-01 a UI-15 aplicados em `app.py`/`src/exporter.py`)  
 **Fase:** UI, UX e apresentação  
 **Projeto:** Médio Dodô / métricaDODÔ  
 **Escopo de implementação:** `app.py`, somente após aprovação desta SPEC  
@@ -14,7 +14,7 @@ A tela atual tem cobertura funcional ampla, porém organiza a leitura em grades 
 
 O fluxo atual permanece preservado nesta fase: input de perfil, seleção da janela, modo demonstração, análise, progresso, estados de erro, relatório concluído, botão `Ver Relatório`, exportação e geração de novo relatório. A mudança proposta é editorial e espacial, não algorítmica.
 
-| Área atual | Evidência no código | Problema de leitura | Direção SPEC-001 |
+| Área atual | Evidência no código | Problema de leitura | Direção SPEC-002 |
 |---|---|---|---|
 | Entrada | `Perfil do Instagram`, `Janela de análise`, `Modo demonstração` | A ação principal aparece como `Analisar`, menos específica que o resultado esperado | Usar `Gerar relatório`; manter a janela e demo como controles secundários |
 | KPI superior | `st.columns(3)` com seguidores, engajamento e inautenticidade | Primeira linha é clara, mas o card de inautenticidade usa linguagem acusatória | Renomear para `Autenticidade da audiência (estimativa)` e exibir procedência |

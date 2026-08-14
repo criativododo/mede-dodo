@@ -507,3 +507,78 @@ checkout principal) e a limpeza do worktree puderam ser concluídos, todos nesta
 - [ ] Backlog remanescente (BENCHMARK-001.md/ISSUE-001.md, não coberto nesta rodada):
       histórico comercial/colaborações (P2), validação de `RealGeminiClient` contra a API
       real do Gemini (ISSUE-0003), calibração do Score DODÔ com dados reais.
+
+## Sprint 002 — Refatoração editorial de UI/UX (SPEC-002, 2026-08-14)
+Execução em modo autônomo (worktree `worktree-sprint-002-ui-refactor`) da especificação de
+refatoração editorial da tela de relatório, aprovada e implementada nesta rodada — a rodada
+de fechamento anterior (seção acima) havia encerrado a Sprint 002 do ponto de vista de dados/
+fixtures/exportador, mas a reorganização visual proposta pela SPEC ainda não tinha sido
+aplicada a `app.py`. Especificação versionada primeiro em `SPRINT-002/SPEC-001.md`
+(commit `docs(sprint-002)`) e depois realocada para o local canônico `specs/SPEC-002.md`
+(numeração sequencial após `specs/SPEC-001.md`, o MVP original).
+
+- **`app.py`** — camada de renderização (`_render_report_page` e as 10 funções que
+  compõem, em ordem, a arquitetura de informação da SPEC: cabeçalho do perfil, leitura para
+  contratação, KPIs principais, formatos e Reels, qualidade da audiência, qualidade e
+  conteúdo, perfil da audiência, comentários e intenção, detalhes da auditoria e exportação)
+  reescrita do zero sobre os mesmos dados de `analysis` já calculados por `_run_pipeline`
+  (nenhuma fórmula/heurística de coleta, score, antifraude, demografia ou Gemini foi tocada —
+  só apresentação, nomenclatura e agrupamento). KPIs principais agora usam sempre
+  `st.columns(2)` em vez de `st.columns(3)`/`st.columns(4)` (UI-01/UI-02); grades assimétricas
+  usam `st.columns([1.35, 1])`. Nomenclatura canônica da SPEC aplicada (ex.: "Taxa de
+  engajamento" → "Engajamento por seguidores", "Índice de pods"/"Antifraude" → "Sinal de
+  interação coordenada"/"Qualidade da audiência", "Publis" → "Parcerias identificadas",
+  "Demografia da audiência" → "Perfil da audiência (estimativa)"), com a microcopy exigida na
+  seção 5 da SPEC anexada via `help=` dos `st.metric` (tooltip nativo do Streamlit,
+  navegável por teclado) e badges de procedência (`observado`/`derivado`/`estimado`) como
+  `st.caption` abaixo de cada indicador. Dados brutos, tabela completa de itens do Gemini e o
+  card de proveniência técnica foram movidos para dentro de um único
+  `st.expander("Detalhes da auditoria", expanded=False)` (UI-09). Tokens do Design System
+  Criativo Dodô (Creme Cannoli/Branco Brilhante/Ônix/Vermelho Haute/Dália Vermelha/Cinza
+  Espuma) aplicados via injeção de CSS (`_inject_design_system_css`) sobre fundo, cards
+  (`st.container(border=True)`/expander), botões (raio 999px, hover invertido, foco em
+  Vermelho Haute) e a faixa de acento de 6px da "Leitura para contratação" — nenhuma cor,
+  fonte ou raio fora da tabela de tokens da SPEC foi usado (UI-11). Campo aditivo
+  `analysis["data_coleta"]` (lido de `profiles.updated_at`, já existente no cache SQLite) 
+  passou a alimentar o cabeçalho do perfil; nenhum campo existente de `analysis` foi removido
+  ou renomeado internamente (UI-04/§2.2).
+- **`src/exporter.py`** — cabeçalhos de seção do HTML/PDF realinhados à mesma nomenclatura e
+  ordem (Métricas principais → Qualidade da audiência → Qualidade e conteúdo → Perfil da
+  audiência → Comentários e intenção → Proveniência e Escopo das Métricas), sem alterar
+  nenhuma função de cálculo/formatação de dado (UI-13/UI-14) — só os textos de `<h2>`/`<h3>`
+  no HTML e os títulos de seção no PDF.
+- **TDD** — `tests/test_app.py` e `tests/test_exporter.py` atualizados para a nova
+  nomenclatura/estrutura (funções renomeadas: `_render_top_posts_card` →
+  `_render_posts_maior_repercussao`, `_render_popular_tags_card` →
+  `_render_hashtags_populares`, `_render_brand_mentions_card`/`_render_publis_card` →
+  `_render_parcerias_identificadas`, `_render_demografia_card` → `_render_audience_profile`).
+  **Suíte completa: 305 → 305 testes, 100% verde** (mesma contagem da rodada anterior — a
+  refatoração reorganizou a UI sem adicionar/remover cobertura de teste; `.venv/bin/python -m
+  pytest tests/`).
+- **Smoke test real**: `.venv/bin/python -m streamlit run app.py --server.headless=true`
+  iniciado e confirmado escutando (porta local), sem exceção no boot — validação de que a
+  reescrita completa da camada de renderização não quebra a inicialização real do app, além
+  da cobertura via `AppTest`.
+
+### Checklist de critérios de aceite (SPEC-002 §11)
+- [x] UI-01/UI-02/UI-03 — sem `st.columns(3)`/`st.columns(4)` nos KPIs principais; grade de
+      2 colunas com `gap="large"`; primeiro nível com cabeçalho + leitura para contratação +
+      4 KPIs.
+- [x] UI-04/UI-05/UI-06/UI-07 — nomenclatura canônica aplicada sem alterar chaves internas;
+      tooltip exata do "Sinal de interação coordenada"; badges/cobertura amostral junto dos
+      indicadores.
+- [x] UI-08 — estados `indisponível` nunca formatados como `0,00%` (engajamento por views e
+      autenticidade da audiência têm ramo explícito de fallback).
+- [x] UI-09 — números brutos, itens Gemini e fórmulas só em "Detalhes da auditoria".
+- [x] UI-10 — disclaimer de revisão humana sempre presente na "Leitura para contratação",
+      com ou sem Gemini configurado.
+- [x] UI-11 — só tokens do Design System Criativo Dodô usados na injeção de CSS.
+- [x] UI-12/UI-13/UI-14 — fluxo de análise/progresso/erro/exportação preservado; nenhuma
+      fórmula/heurística/exportador alterado; HTML/PDF continuam acessíveis.
+- [x] Suíte automatizada 100% verde (305/305).
+- [ ] **Pendente**: validação visual manual no navegador real (mesma pendência recorrente
+      das rodadas anteriores — sem acesso à extensão Chrome em ambiente de background nesta
+      sessão).
+- [ ] **Pendente (ação manual do usuário)**: sincronização com o Google Drive — a skill
+      `/drive` tem trava contra invocação automática por IA (`disable-model-invocation`);
+      rodar `/drive` manualmente no terminal para atualizar os documentos espelhados.

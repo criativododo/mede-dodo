@@ -354,6 +354,7 @@ def generate_html_report(analysis: dict) -> str:
   body {{ font-family: -apple-system, Helvetica, Arial, sans-serif; background: #0f1115; color: #e8e8ef; margin: 0; padding: 24px; }}
   h1 {{ font-size: 22px; margin-bottom: 4px; }}
   h2 {{ font-size: 16px; color: #9ea3b0; margin-top: 32px; border-bottom: 1px solid #2a2d36; padding-bottom: 6px; }}
+  h3 {{ font-size: 13px; color: #9ea3b0; margin-top: 20px; }}
   .subtitulo {{ color: #9ea3b0; margin-top: 0; }}
   .cards {{ display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; }}
   .card {{ background: #1a1d24; border-radius: 10px; padding: 16px 20px; min-width: 160px; flex: 1; }}
@@ -371,35 +372,33 @@ def generate_html_report(analysis: dict) -> str:
   <p class="subtitulo">Janela analisada: últimos {window_days} dias</p>
 
   <div class="cards">
-    <div class="card"><div class="valor">{score}</div><div class="label">Score DODÔ (0-10)</div></div>
-    <div class="card"><div class="valor">{engagement}</div><div class="label">Taxa de engajamento</div></div>
-    <div class="card"><div class="valor">{pod_index}</div><div class="label">Índice de pods</div></div>
-    <div class="card"><div class="valor">{taxa_resposta}</div><div class="label">Taxa de resposta da criadora</div></div>
+    <div class="card"><div class="valor">{score}</div><div class="label">Score DODÔ</div></div>
+    <div class="card"><div class="valor">{engagement}</div><div class="label">Engajamento por seguidores</div></div>
+    <div class="card"><div class="valor">{pod_index}</div><div class="label">Sinal de interação coordenada</div></div>
+    <div class="card"><div class="valor">{taxa_resposta}</div><div class="label">Respostas da criadora</div></div>
   </div>
 
-  <h2>Demografia</h2>
+  <h2>Qualidade da audiência</h2>
+  <p><strong>Contas com padrão de repetição (possível sinal de interação coordenada):</strong></p>
+  <ul>{top_repetidores_html}</ul>
+
+  <h2>Qualidade e conteúdo</h2>
+  <h3>Posts de maior repercussão</h3>
+  {top_posts_section}
+  <h3>Hashtags populares</h3>
+  {popular_tags_section}
+  <h3>Parcerias identificadas</h3>
+  {publis_html}
+  <h3>Menções de marcas</h3>
+  {brand_mentions_section}
+
+  <h2>Perfil da audiência (estimativa)</h2>
   <p><strong>Gênero predominante:</strong> {genero}</p>
   <p><strong>Regiões detectadas:</strong> {regioes_texto}</p>
   {coverage_html}
 
-  <h2>Antifraude</h2>
-  <p><strong>Top repetidores (possíveis pods):</strong></p>
-  <ul>{top_repetidores_html}</ul>
-
-  <h2>Publis</h2>
-  {publis_html}
-
-  <h2>Top 3 Posts</h2>
-  {top_posts_section}
-
-  <h2>Hashtags populares</h2>
-  {popular_tags_section}
-
-  <h2>Menções de marcas</h2>
-  {brand_mentions_section}
-
-  <h2>Comentários analisados</h2>
-  <p><strong>Total coletado:</strong> {total_comentarios} — <strong>Qualificados (não rasos):</strong> {qualificados}</p>
+  <h2>Comentários e intenção</h2>
+  <p><strong>Total coletado:</strong> {total_comentarios} — <strong>Comentários com sinal útil:</strong> {qualificados}</p>
   {parecer_section}
   {gemini_section}
 
@@ -455,25 +454,16 @@ def generate_pdf_report(analysis: dict) -> bytes:
     pdf.set_font("helvetica", "B", 12)
     pdf.cell(0, 8, "Metricas principais", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("helvetica", "", 11)
-    pdf.cell(0, 7, _pdf_safe(f"Score DODO (0-10): {score}"), new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 7, _pdf_safe(f"Taxa de engajamento: {engagement}"), new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 7, _pdf_safe(f"Indice de pods: {pod_index}"), new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 7, _pdf_safe(f"Taxa de resposta da criadora: {taxa_resposta}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, _pdf_safe(f"Score DODO: {score}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, _pdf_safe(f"Engajamento por seguidores: {engagement}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, _pdf_safe(f"Sinal de interacao coordenada: {pod_index}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, _pdf_safe(f"Respostas da criadora: {taxa_resposta}"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
     pdf.set_font("helvetica", "B", 12)
-    pdf.cell(0, 8, "Demografia", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, "Qualidade da audiencia", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("helvetica", "", 11)
-    pdf.cell(0, 7, _pdf_safe(f"Genero predominante: {genero}"), new_x="LMARGIN", new_y="NEXT")
-    pdf.multi_cell(0, 7, _pdf_safe(f"Regioes detectadas: {regioes_texto}"), new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("helvetica", "I", 10)
-    for line in coverage_lines:
-        pdf.multi_cell(0, 6, _pdf_safe(line), new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(2)
-
-    pdf.set_font("helvetica", "B", 12)
-    pdf.cell(0, 8, "Antifraude - top repetidores", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("helvetica", "", 11)
+    pdf.cell(0, 7, "Contas com padrao de repeticao (possivel sinal de interacao coordenada):", new_x="LMARGIN", new_y="NEXT")
     if top_repetidores:
         for user, count in top_repetidores:
             pdf.cell(0, 7, _pdf_safe(f"- {user}: {count} comentarios"), new_x="LMARGIN", new_y="NEXT")
@@ -482,7 +472,9 @@ def generate_pdf_report(analysis: dict) -> bytes:
     pdf.ln(2)
 
     pdf.set_font("helvetica", "B", 12)
-    pdf.cell(0, 8, "Publis", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, "Qualidade e conteudo", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "B", 11)
+    pdf.cell(0, 7, "Parcerias identificadas", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("helvetica", "I", 11)
     if publis:
         for item in publis:
@@ -495,7 +487,7 @@ def generate_pdf_report(analysis: dict) -> bytes:
     pdf.ln(2)
 
     pdf.set_font("helvetica", "B", 12)
-    pdf.cell(0, 8, "Top 3 Posts", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, "Posts de maior repercussao", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("helvetica", "", 10)
     if top_posts_rows:
         for item in top_posts_rows:
@@ -538,12 +530,22 @@ def generate_pdf_report(analysis: dict) -> bytes:
     pdf.ln(2)
 
     pdf.set_font("helvetica", "B", 12)
-    pdf.cell(0, 8, "Comentarios analisados", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, "Perfil da audiencia (estimativa)", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "", 11)
+    pdf.cell(0, 7, _pdf_safe(f"Genero predominante: {genero}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.multi_cell(0, 7, _pdf_safe(f"Regioes detectadas: {regioes_texto}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "I", 10)
+    for line in coverage_lines:
+        pdf.multi_cell(0, 6, _pdf_safe(line), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(2)
+
+    pdf.set_font("helvetica", "B", 12)
+    pdf.cell(0, 8, "Comentarios e intencao", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("helvetica", "", 11)
     pdf.cell(
         0,
         7,
-        _pdf_safe(f"Total coletado: {total_comentarios} | Qualificados (nao rasos): {qualificados}"),
+        _pdf_safe(f"Total coletado: {total_comentarios} | Comentarios com sinal util: {qualificados}"),
         new_x="LMARGIN",
         new_y="NEXT",
     )

@@ -314,7 +314,7 @@ def test_generate_html_report_includes_top_posts_hashtags_and_mentions_when_avai
 
     html = exporter.generate_html_report(analysis)
 
-    assert "Top 3 Posts" in html
+    assert "Posts de maior repercussão" in html
     assert "https://www.instagram.com/p/aaa/" in html
     assert "Hashtags populares" in html
     assert "#moda" in html
