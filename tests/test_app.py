@@ -573,3 +573,61 @@ def test_run_pipeline_exposes_new_brand_suitability_aggregates_with_fake_gemini_
     assert parecer["distribuicao_intencao_compra"]["alta"] == 0.5
     assert parecer["distribuicao_intencao_compra"]["media"] == 0.5
     assert parecer["faixa_etaria_predominante"] == "18-24"
+
+
+def test_compute_eta_seconds_returns_none_when_mean_unknown():
+    import app
+
+    assert app._compute_eta_seconds(10, None) is None
+
+
+def test_compute_eta_seconds_returns_none_when_nothing_remaining():
+    import app
+
+    assert app._compute_eta_seconds(0, 3.5) is None
+
+
+def test_compute_eta_seconds_multiplies_remaining_by_mean():
+    import app
+
+    assert app._compute_eta_seconds(4, 3.5) == 14.0
+
+
+def test_compute_eta_seconds_clamps_to_max_runtime_budget():
+    import app
+
+    assert app._compute_eta_seconds(1000, 3.5, max_runtime_budget=60.0) == 60.0
+
+
+def test_format_eta_formats_seconds_only():
+    import app
+
+    assert app._format_eta(0) == "0s"
+    assert app._format_eta(45) == "45s"
+
+
+def test_format_eta_formats_minutes_and_seconds():
+    import app
+
+    assert app._format_eta(60) == "1min"
+    assert app._format_eta(75) == "1min 15s"
+    assert app._format_eta(125.6) == "2min 6s"
+
+
+def test_make_coleta_progress_callback_updates_state_progressively():
+    import app
+
+    state = {}
+    callback = app._make_coleta_progress_callback(state)
+
+    callback(1, 4)
+    assert state["etapa"] == "coleta"
+    assert 0.05 <= state["progresso"] <= 0.30
+    primeiro_progresso = state["progresso"]
+    assert "1/4" in state["mensagem"]
+
+    callback(2, 4)
+    assert state["progresso"] > primeiro_progresso
+    assert "2/4" in state["mensagem"]
+    assert state["eta_seconds"] is not None
+    assert state["eta_seconds"] >= 0

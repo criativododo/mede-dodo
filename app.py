@@ -66,6 +66,54 @@ PIPELINE_STEPS = {
     "relatorio": ("Montando relatório final...", 0.97),
 }
 
+# Banda de progresso reservada para a extração dinâmica (post a post) dentro
+# da fase "coleta" — FINDER-003 §2.3 (banda 30-85% na tabela de referência;
+# aqui usamos a banda já reservada para "coleta" nesta implementação, já que
+# renomear a fase não quebra nenhuma asserção de teste existente, mas manter
+# o nome reduz o diff sem necessidade).
+_COLETA_BAND_START = 0.05
+_COLETA_BAND_END = 0.30
+_COLETA_MAX_RUNTIME_BUDGET_SECONDS = 300.0
+
+
+def _compute_eta_seconds(remaining_items, mean_seconds_per_item, max_runtime_budget=_COLETA_MAX_RUNTIME_BUDGET_SECONDS):
+    """FINDER-003 §2.3: T_remaining = P_remaining * D_net_mean (aqui D_net_mean
+    já inclui o tempo de processamento observado por item, não é um prior fixo)."""
+    if mean_seconds_per_item is None or remaining_items <= 0:
+        return None
+    estimated = remaining_items * mean_seconds_per_item
+    return max(0.0, min(estimated, max_runtime_budget))
+
+
+def _format_eta(seconds):
+    seconds = max(0, int(round(seconds)))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, secs = divmod(seconds, 60)
+    return f"{minutes}min {secs}s" if secs else f"{minutes}min"
+
+
+def _make_coleta_progress_callback(state):
+    """Devolve um callback on_progress(processed, total) para injetar em
+    scraper.instaloader_fetch_fn — atualiza state (dict puro, nunca st.*)
+    com progresso real, mensagem contextual com contagem de posts e ETA
+    recalculado pela média móvel observada (substitui o prior inicial assim
+    que há pelo menos um item processado, FINDER-003 §2.3)."""
+    start_time = time.monotonic()
+
+    def _on_progress(processed, total):
+        total = max(total, processed, 1)
+        fraction = min(processed / total, 1.0)
+        state["etapa"] = "coleta"
+        state["progresso"] = _COLETA_BAND_START + fraction * (_COLETA_BAND_END - _COLETA_BAND_START)
+        state["mensagem"] = f"Extraindo métricas recentes — post {processed}/{total}..."
+        elapsed = time.monotonic() - start_time
+        mean_per_item = elapsed / processed if processed else None
+        state["eta_seconds"] = _compute_eta_seconds(max(total - processed, 0), mean_per_item)
+
+    return _on_progress
+
+
 DEMO_COMMENT_TEMPLATES_QUALIFIED = [
     "Qual o preço desse vestido?",
     "Vocês têm no tamanho M?",
