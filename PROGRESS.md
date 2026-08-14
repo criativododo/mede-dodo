@@ -66,9 +66,17 @@
   (Pará) corrigido.
 - [~] **ISSUE-0003** — Processamento Gemini em Lote. `src/gemini_analyzer.py` (batching
   com teto de 2 chamadas/perfil, schema JSON, fallback gracioso de rate limit) pronto e
-  testado com cliente mockado. `RealGeminiClient` (SDK `google.generativeai` real,
-  `GeminiRateLimitError` para cota) implementado e **integrado ao pipeline de `app.py`**
-  (instanciado quando `GEMINI_API_KEY` está no ambiente; ausência tratada graciosamente,
+  testado com cliente mockado. **Migrado do SDK legado `google-generativeai` para o SDK
+  oficial atual `google-genai`** (`requirements.txt`: `google-genai==2.17.0`;
+  `RealGeminiClient` usa `from google import genai`/`self._client.models.generate_content`
+  com `config=types.GenerateContentConfig(response_mime_type="application/json")` e
+  `model="gemini-flash-latest"`; captura `google.genai.errors.APIError` para os códigos
+  retryable 429/503, preservando o retry com backoff exponencial `[2, 4, 8]`s e o
+  relançamento de `GeminiRateLimitError`; assinatura pública `generate_content(prompt) ->
+  str` e `RealGeminiClient(model_name=...)` inalteradas para não quebrar `app.py`). Testes
+  em `tests/test_gemini_analyzer.py` mockam a hierarquia real do SDK
+  (`mock_client.models.generate_content`), sem depreciação. **Integrado ao pipeline de
+  `app.py`** (instanciado quando `GEMINI_API_KEY` está no ambiente; ausência tratada graciosamente,
   sem quebrar o app). Pendente: chamada real à API do Gemini não testada neste ambiente
   (sem `GEMINI_API_KEY` disponível). Índice de pods deliberadamente fora do schema do
   Gemini (decisão de engenharia, ver ISSUE-0003.md). Prompt não oferece mais
@@ -103,10 +111,27 @@
   falha de coleta real alinhada ao texto exato exigido (sem sugerir Modo Demonstração como
   alternativa a dados reais), e `genero_pct` exposto na demografia (prova quantitativa de
   que o engine já usa a base real do IBGE, não uma amostra sintética).
+- [x] **Pacing/Anti-Ban (branch `worktree-pacing-anti-ban-progresso`, pendente de merge para
+  `main`)** — `src/rate_controller.py` (`RateController`, novo): controlador de pacing
+  conservador com `SafeStop` acionado em 429/403/challenge do Instagram, ligado de verdade
+  ao pipeline real de `app.py` (não só instanciado — usado a cada requisição da coleta).
+  `src/scraper.py` ganhou pacing por post (jitter entre posts, não só entre perfis) e
+  propaga `SafeStop` sem cair no fallback de cache genérico quando a causa é bloqueio de
+  segurança (evita mascarar um 429/checkpoint real como "sem dados"). `app.py` ganhou ETA
+  dinâmico por média móvel (substitui estimativa fixa), mensagem de progresso contextual, o
+  status novo `pausado_seguranca` (quando o `SafeStop` interrompe a coleta) e o botão "Ver
+  Relatório" só libera a exportação HTML/PDF/JSON quando o pipeline chega de fato a
+  `concluido`. Merge para `main` ainda não realizado — ver seção "Pendências" abaixo.
 
 ## Testes
-**168/168 passando** (`.venv/bin/python -m pytest tests/`), saída limpa (1 warning de
-depreciação do `google.generativeai`, fora do escopo desta sessão).
+**225/225 passando** (`.venv/bin/python -m pytest tests/`, validado nesta sessão a partir
+do branch `worktree-pacing-anti-ban-progresso`), saída limpa quanto ao código do projeto —
+resta 1 `DeprecationWarning` interno da própria lib `google-genai`
+(`google/genai/types.py:42`, sobre `_UnionGenericAlias` do Python 3.14), não originado por
+código deste repositório e fora do alcance de correção local. O SDK do Gemini **já foi
+migrado de `google-generativeai` para `google-genai`** em sessão anterior (commit
+`f7e08a9`, `requirements.txt: google-genai==2.17.0`, já presente em `main` antes deste
+branch existir) — não fazia parte do trabalho pendente desta sessão.
 Evolução: 28 (ISSUE-0001/2/3) → 43 (+ISSUE-0005) → 57 (+ISSUE-0006) → 61 (+ISSUE-0004)
 → 70 (+fix região "para"/Pará, +`instaloader_fetch_fn` e fallback de cache)
 → 74 (+integração dos conectores reais no pipeline de `app.py`, +2 testes de `app.py`,
@@ -147,6 +172,13 @@ faixa etária predominante) — `src/exporter.py` deliberadamente intocado neste
 +6 testes em `tests/test_gemini_analyzer.py` e `tests/test_app.py`. Criado também
 `iniciar_app.command` na raiz, lançador de 1 clique para macOS que cria `.venv`, instala
 dependências e sobe o Streamlit — testado ao vivo, subiu o servidor e respondeu HTTP 200).
+→ (histórico de commits subsequentes em `main`, não detalhado passo a passo neste arquivo:
+migração do SDK do Gemini para `google-genai`, retry 429/503, insights acionáveis de
+campanha, PostScore canônico com duplo ranking — ver `git log main` e
+`docs/issues/ISSUE-0003.md`) → 225 (2026-08-13, branch `worktree-pacing-anti-ban-progresso`:
++49 testes para `RateController`/pacing por post/`SafeStop`/ETA dinâmico/status
+`pausado_seguranca`/botão Ver Relatório condicionado a `concluido`, ver bullet
+"Pacing/Anti-Ban" acima).
 
 ## MVP: o que funciona hoje
 Pipeline completo de ponta a ponta (`app.py`) em **Modo Demonstração** (dados fictícios
@@ -169,3 +201,18 @@ Gemini real neste ambiente.
 2. Validação da tabela de DDDs contra a fonte oficial ANATEL (indisponível nesta sessão)
    e, se desejado, ampliação da base de nomes além do top-1000/gênero.
 3. Calibração dos pesos do Score DODÔ com dados reais de campanha (hoje é heurística).
+
+## Pendências (2026-08-13)
+1. **Merge do branch `worktree-pacing-anti-ban-progresso` para `main` não realizado nesta
+   sessão.** O `git merge-tree --write-tree main worktree-pacing-anti-ban-progresso` (rodado
+   sem checkout, só leitura de objetos) confirma merge limpo, sem conflitos. A sessão que
+   fez esse trabalho rodou isolada dentro do próprio worktree — o harness bloqueia
+   operações git desse worktree contra o checkout compartilhado de `main`, e este projeto
+   não tem `remote` configurado para viabilizar um push+PR. Para concluir: a partir do
+   checkout principal (`/Users/danielperrut/0. PROJETO/mede-dodo`), rodar
+   `git merge worktree-pacing-anti-ban-progresso`, depois `.venv/bin/python -m pytest
+   tests/` para confirmar os 225 testes, e então `git worktree remove
+   .claude/worktrees/pacing-anti-ban-progresso`.
+2. `RealGeminiClient` (SDK `google-genai`) segue sem validação contra a API real do Gemini
+   neste ambiente (sem `GEMINI_API_KEY`) — mocks cobrem 100% do contrato, mas não uma
+   chamada de rede real ao endpoint atual.
