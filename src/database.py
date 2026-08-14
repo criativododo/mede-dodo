@@ -48,6 +48,14 @@ def init_db(db_path=DB_PATH):
     existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(profiles)")}
     if "source" not in existing_columns:
         conn.execute("ALTER TABLE profiles ADD COLUMN source TEXT")
+    # Migração (Sprint 002 Fase 2): payload canônico de auditoria
+    # (metrics.build_audit_report), serializado em JSON, com toda a
+    # proveniência por métrica preservada. Bancos antigos ficam com
+    # audit_report=NULL até a próxima análise gravar um relatório —
+    # get_cached_data() trata isso como "ainda não calculado", nunca apaga
+    # nada do cache existente.
+    if "audit_report" not in existing_columns:
+        conn.execute("ALTER TABLE profiles ADD COLUMN audit_report TEXT")
     conn.commit()
     conn.close()
 
@@ -98,6 +106,24 @@ def save_profile_data(username, posts, bio=None, followers_count=None, source=No
     conn.close()
 
 
+def save_audit_report(username, audit_report, db_path=DB_PATH):
+    """Persiste o payload canônico de auditoria (metrics.build_audit_report) do
+    perfil já cacheado, com toda a proveniência por métrica preservada via
+    JSON. Só faz UPDATE na linha existente de `profiles` — nunca mexe em
+    `posts_cache` nem em `save_profile_data`, para que persistir o relatório
+    de métricas não tenha nenhum risco de apagar ou substituir os posts já
+    coletados (DUMMY.md #5). Sem efeito (silencioso, sem lançar exceção) se o
+    perfil ainda não tiver sido salvo por `save_profile_data`."""
+    init_db(db_path=db_path)
+    conn = get_connection(db_path)
+    conn.execute(
+        "UPDATE profiles SET audit_report = ? WHERE username = ?",
+        (json.dumps(audit_report), username),
+    )
+    conn.commit()
+    conn.close()
+
+
 def clear_profile_cache(username, db_path=DB_PATH):
     """Apaga do cache local todo o perfil e posts de `username` (RF: botão
     'Limpar Cache e Re-analisar Perfil'). Sem efeito sobre outros perfis; não
@@ -142,8 +168,10 @@ def get_cached_data(username, window_days, source=None, db_path=DB_PATH):
         (username, cutoff),
     ).fetchall()
     conn.close()
+    audit_report_raw = profile_row["audit_report"]
     return {
         "profile": dict(profile_row),
+        "audit_report": json.loads(audit_report_raw) if audit_report_raw else None,
         "posts": [
             {
                 "post_id": row["post_id"],

@@ -26,6 +26,41 @@ _DELETED_SCHEMA_SIGNATURE = "has been deleted. you cannot use this schema"
 # no FINDER-003). Pausa e pede ação humana — nunca contorna (FINDER-003 §4.4).
 _CHECKPOINT_SIGNATURES = ("checkpoint_required", "challenge_required")
 
+# BENCHMARK-001.md §4.2: formato do post e views de vídeo/Reels, para permitir
+# engagement_rate_by_views (src/metrics.py). O typename bruto do Instaloader
+# ("GraphImage"/"GraphVideo"/"GraphSidecar") não distingue Reels de outros
+# vídeos — mapeado para o vocabulário do benchmark.
+_MEDIA_TYPE_LABELS = {"GraphImage": "IMAGE", "GraphVideo": "REEL", "GraphSidecar": "CAROUSEL"}
+
+
+def _extract_media_metadata(post):
+    """media_type/is_video/video_view_count nunca lançam exceção: um campo
+    ausente ou instável na resposta do Instagram (mesmo padrão de resiliência
+    já usado no restante deste módulo) vira o valor mais conservador
+    (IMAGE/False/None) em vez de derrubar a coleta do post inteiro."""
+    try:
+        is_video = bool(post.is_video)
+    except Exception:
+        is_video = False
+
+    try:
+        media_type = _MEDIA_TYPE_LABELS.get(post.typename, "IMAGE")
+    except Exception:
+        media_type = "IMAGE"
+
+    video_view_count = None
+    if is_video:
+        try:
+            video_view_count = post.video_view_count
+        except Exception:
+            video_view_count = None
+
+    return {
+        "media_type": media_type,
+        "is_video": is_video,
+        "video_view_count": video_view_count,
+    }
+
 
 def _is_checkpoint_signal(exc_text):
     lowered = exc_text.lower()
@@ -353,6 +388,7 @@ def instaloader_fetch_fn(username, cookies=None, rate_controller=None, on_progre
                     "caption": post.caption,
                     "published_at": post_date.isoformat(),
                     "comments": _fetch_real_comments(post, profile.username),
+                    **_extract_media_metadata(post),
                 },
                 "likes_count": post.likes,
                 "comments_count": post.comments,

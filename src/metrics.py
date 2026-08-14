@@ -99,29 +99,31 @@ def calc_engagement_rate_by_reach(posts):
     }
 
 
-def calc_engagement_rate_by_views(posts, reel_post_types=("reel", "reels")):
-    """ER por views (BENCHMARK-001.md §7.1, ISSUE-001.md §5.4), restrita a
-    posts do tipo Reels: total_interactions / total_views * 100, somado só
-    sobre os Reels da amostra que têm `views_count`. A coleta local atual não
-    classifica `post_type` nem coleta `views_count`, então esta métrica fica
-    "indisponivel" até essa camada de coleta existir — nunca inventa 0."""
-    source = "post_level_reel_views"
-    denominator = "views_count"
+def calc_engagement_rate_by_views(posts):
+    """ER por views (BENCHMARK-001.md §7.1/§4.2, ISSUE-001.md §5.4), restrita a
+    posts de vídeo/Reels: total_interactions / total_views * 100, somado só
+    sobre os posts da amostra com `raw.is_video=True` e `raw.video_view_count`
+    válido (Sprint 002 Fase 2: `src/scraper.py` popula esses dois campos a
+    partir de `post.is_video`/`post.video_view_count` do Instaloader). Nunca
+    lança exceção; sem nenhum vídeo com views na amostra, a métrica fica
+    "indisponivel" em vez de inventar um 0."""
+    source = "post_level_video_view_count"
+    denominator = "video_view_count"
 
     reels_com_views = [
         post
         for post in posts
-        if post.get("post_type") in reel_post_types and post.get("views_count")
+        if (post.get("raw") or {}).get("is_video") and (post.get("raw") or {}).get("video_view_count")
     ]
-    total_views = sum(post["views_count"] for post in reels_com_views)
+    total_views = sum((post.get("raw") or {})["video_view_count"] for post in reels_com_views)
 
     if not reels_com_views or not total_views:
         return _unavailable_engagement_metric(
             source,
             denominator,
             0,
-            "Nenhum post do tipo Reels com views coletado na amostra — a coleta atual "
-            "não classifica post_type/views_count.",
+            "Nenhum post de vídeo/Reels com video_view_count coletado na amostra — "
+            "requer raw.is_video=True e raw.video_view_count válido.",
         )
 
     total_interactions = sum(_interactions(post) for post in reels_com_views)

@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src import exporter
+from src import exporter, metrics
 
 
 def make_analysis(**overrides):
@@ -219,6 +219,56 @@ def test_generate_pdf_report_handles_multiple_gemini_items():
         {"comentario": "Vocês têm no tamanho M?", "intencao_compra": "media", "faixa_etaria_estimada": "18-24"},
         {"comentario": "Chega até Belo Horizonte?", "intencao_compra": "baixa", "faixa_etaria_estimada": "desconhecida"},
     ]
+
+    pdf_bytes = exporter.generate_pdf_report(analysis)
+
+    assert isinstance(pdf_bytes, (bytes, bytearray))
+    assert bytes(pdf_bytes).startswith(b"%PDF")
+
+
+# --- Proveniência e Escopo das Métricas (Sprint 002 Fase 2, ETAPA 3.3) ---
+
+
+def _make_audit_report_with_followers_only():
+    posts = [{"likes_count": 100, "comments_count": 10}]
+    return metrics.build_audit_report(posts, followers_count=1000)
+
+
+def test_generate_html_report_includes_provenance_section_with_available_and_unavailable_metrics():
+    analysis = make_analysis(audit_report=_make_audit_report_with_followers_only())
+
+    html = exporter.generate_html_report(analysis)
+
+    assert "Proveniência e Escopo das Métricas" in html
+    assert "Por seguidores" in html
+    assert "Disponível" in html
+    assert "Por alcance" in html
+    assert "Por views de Reels" in html
+    assert "Indisponível nesta amostra" in html
+    assert "local_scraper_sample" in html
+
+
+def test_generate_html_report_handles_missing_audit_report_gracefully():
+    analysis = make_analysis()  # sem "audit_report" — mesmo formato de analyses pré-Sprint 002 Fase 2
+    assert "audit_report" not in analysis
+
+    html = exporter.generate_html_report(analysis)
+
+    assert "Proveniência e Escopo das Métricas" in html
+    assert "ainda não disponível" in html
+
+
+def test_generate_pdf_report_includes_provenance_section_without_raising():
+    analysis = make_analysis(audit_report=_make_audit_report_with_followers_only())
+
+    pdf_bytes = exporter.generate_pdf_report(analysis)
+
+    assert isinstance(pdf_bytes, (bytes, bytearray))
+    assert bytes(pdf_bytes).startswith(b"%PDF")
+
+
+def test_generate_pdf_report_handles_missing_audit_report_gracefully():
+    analysis = make_analysis()
 
     pdf_bytes = exporter.generate_pdf_report(analysis)
 

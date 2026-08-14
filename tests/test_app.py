@@ -6,6 +6,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from streamlit.testing.v1 import AppTest
 
+from src import database
+
 APP_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py")
 
 
@@ -406,6 +408,37 @@ def test_run_pipeline_detects_sponsored_posts_in_demo_mode():
     assert len(publis) >= 1
     assert all("termos" in item and item["termos"] for item in publis)
     assert all(item["link"] is None or item["link"].startswith("https://www.instagram.com/p/") for item in publis)
+
+
+def test_run_pipeline_attaches_canonical_audit_report_with_reels_views_in_demo_mode():
+    """Sprint 002 Fase 2: build_audit_report() deve ser anexado a
+    analysis["audit_report"], com engagement_rate_by_views calculável no
+    Modo Demonstração (demo_fetch_fn gera Reels com video_view_count) —
+    prova de que o contrato canônico está de fato ligado ao pipeline real,
+    não só testado isoladamente em tests/test_metrics.py."""
+    import app
+
+    username = f"perfil_demo_audit_report_{uuid.uuid4().hex}"
+    state = {}
+    app._run_pipeline(username, 90, True, None, state)
+
+    assert state["status"] == "concluido"
+    audit_report = state["analysis"]["audit_report"]
+    assert set(audit_report.keys()) == {"metrics", "provenance"}
+
+    by_followers = audit_report["metrics"]["engagement_rate_by_followers"]
+    assert by_followers["status"] == "ok"
+    assert isinstance(by_followers["value"], float)
+
+    by_views = audit_report["metrics"]["engagement_rate_by_views"]
+    assert by_views["status"] == "ok"
+    assert isinstance(by_views["value"], float)
+
+    # engagement_rate legado (float simples) continua intocado.
+    assert isinstance(state["analysis"]["engagement_rate"], float)
+
+    cached = database.get_cached_data(username, window_days=90, source="demo")
+    assert cached["audit_report"] == audit_report
 
 
 def test_run_pipeline_exposes_genero_pct_in_demo_mode():

@@ -235,9 +235,10 @@ checkout principal, nunca commitada).
     não fornece alcance hoje, então esta métrica fica `indisponivel` em qualquer auditoria
     real até existir uma fonte de alcance (Instagram Insights autenticado).
   - `engagement_rate_by_views`: `total_interactions / total_views * 100`, restrita a posts
-    com `post_type` em `("reel", "reels")` e `views_count` presente — a coleta atual
-    também não classifica `post_type`/`views_count`, então fica `indisponivel` até essa
-    camada existir.
+    com `raw.is_video=True` e `raw.video_view_count` presente — **atualizado na Fase 2 da
+    Sprint 002** (ver seção abaixo) para ler o formato real que `src/scraper.py` passou a
+    popular, substituindo os nomes de campo especulativos (`post_type`/`views_count`) desta
+    entrega inicial.
   - **Retrocompatibilidade preservada**: `scoring.calc_engagement_rate` (consumido por
     `app.py`/`src/exporter.py` como `analysis["engagement_rate"]`, um float simples) não
     foi tocado — o novo contrato é aditivo, ainda não plugado no pipeline/UI (isso é
@@ -248,3 +249,53 @@ checkout principal, nunca commitada).
   para amostra vazia, seguidores zerados, ausência de `estimated_reach` e ausência de
   Reels com `views_count` — nunca lança exceção. Suíte completa: 225 → **241 testes,
   100% verde** (`.venv/bin/python -m pytest tests/`).
+
+## Sprint 002 — Fase 2: Reels, integração ao pipeline/cache e exportador (2026-08-13)
+Segunda fase da Sprint 002 (branch `worktree-sprint-002-fase2-reels-exportador`, mesclada em
+`main` após a Fase 1). Liga o contrato canônico de métricas (Fase 1) ao pipeline real, com
+detecção de formato de post/Reels na coleta.
+
+- **`src/scraper.py`** (`instaloader_fetch_fn`) — novo `_extract_media_metadata(post)`
+  popula `raw.media_type` (`"IMAGE"`/`"REEL"`/`"CAROUSEL"`, mapeado do `post.typename` bruto
+  do Instaloader — `"GraphImage"`/`"GraphVideo"`/`"GraphSidecar"`), `raw.is_video`
+  (`post.is_video`) e `raw.video_view_count` (`post.video_view_count`, só para vídeos).
+  Nunca lança exceção: qualquer falha ao ler esses atributos (campo ausente na resposta do
+  Instagram) cai no valor mais conservador (`IMAGE`/`False`/`None`), mesmo padrão de
+  resiliência já usado no resto do módulo.
+- **`app.py`** (`demo_fetch_fn`) — mesma correção não estava no escopo original do `/goal`
+  (que a listava por engano em `src/scraper.py`; `demo_fetch_fn` sempre viveu em `app.py`),
+  mas foi replicada aqui: alterna `CAROUSEL`/`REEL`/`IMAGE` a cada 3 posts (2 Reels por
+  janela de 6 posts, com `video_view_count` sintético), para o Modo Demonstração exercitar
+  `engagement_rate_by_views` fim a fim sem precisar de credenciais reais.
+- **`src/metrics.py`** — `calc_engagement_rate_by_views` reescrita para ler
+  `raw.is_video`/`raw.video_view_count` (formato real que o scraper agora popula) em vez
+  dos nomes especulativos da Fase 1 (`post_type`/`views_count`); `source`/`denominator`
+  atualizados para `post_level_video_view_count`/`video_view_count`. Continua retornando
+  `status="indisponivel"`/`value=None` sem lançar exceção quando não há vídeo com views na
+  amostra.
+- **`src/database.py`** — nova coluna `profiles.audit_report` (migração idempotente, mesmo
+  padrão já usado para a coluna `source`) e nova função `save_audit_report(username,
+  audit_report, db_path=...)`: persiste o payload canônico (JSON) via `UPDATE` — **nunca
+  toca em `posts_cache`** nem reusa `save_profile_data` (que apagaria e regravaria os posts
+  se chamada com lista vazia), justamente para não correr nenhum risco sobre o cache de
+  posts já coletados (DUMMY.md #5). `get_cached_data` passou a incluir `"audit_report"`
+  (`None` quando nunca foi salvo — retrocompatível com linhas antigas).
+- **`app.py`** (`_run_pipeline`) — chama `metrics.build_audit_report(posts, followers_count)`
+  logo após `pod_result`/`engagement_rate`, persiste via `database.save_audit_report` e
+  anexa o resultado em `analysis["audit_report"]`. `analysis["engagement_rate"]` (float
+  legado consumido por `app.py`/`src/exporter.py`) continua sendo calculado exatamente como
+  antes — nenhuma chave legada foi removida ou alterada.
+- **`src/exporter.py`** — nova seção "Proveniência e Escopo das Métricas" no HTML (tabela:
+  tipo de cálculo, valor, status, fonte, confiança) e no PDF (mesmas informações em texto),
+  a partir de `analysis.get("audit_report")`. Quando `audit_report` está ausente (relatórios
+  gerados antes desta fase, ou falha ao computá-lo), mostra uma nota explicativa em vez de
+  lançar exceção — todos os testes de exportador anteriores a esta fase (que não passam
+  `audit_report`) continuam verdes sem nenhuma alteração, prova da retrocompatibilidade.
+- **Testes**: +4 em `tests/test_scraper.py` (media_type/is_video/video_view_count para
+  Reel/Image/Carousel + resiliência a atributos que lançam exceção), +4 em
+  `tests/test_database.py` (persistência/leitura do `audit_report`, isolamento de
+  `posts_cache`, safety quando o perfil nunca foi salvo), +1 em `tests/test_app.py`
+  (integração real: Modo Demonstração produz `audit_report` com `engagement_rate_by_views`
+  disponível, e o cache SQLite reflete o mesmo relatório), +5 em `tests/test_exporter.py`
+  (seção de proveniência presente/ausente em HTML e PDF). Suíte completa: 241 → **255
+  testes, 100% verde** (`.venv/bin/python -m pytest tests/`).

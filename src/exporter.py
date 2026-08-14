@@ -62,6 +62,52 @@ def _top_repetidores_linhas(top_repetidores):
     return sorted(top_repetidores.items(), key=lambda item: item[1], reverse=True)
 
 
+# Seção "Proveniência e Escopo das Métricas" (Sprint 002 Fase 2, ETAPA 3.3) —
+# expõe, por taxa de engajamento do contrato canônico (src/metrics.py
+# build_audit_report), o tipo de cálculo, o status (disponível/indisponível
+# na amostra) e a fonte, para o leitor do relatório nunca confundir "sem
+# dado" com "engajamento zero" (BENCHMARK-001.md §6).
+_ENGAGEMENT_RATE_PROVENANCE_LABELS = {
+    "engagement_rate_by_followers": "Por seguidores",
+    "engagement_rate_by_reach": "Por alcance",
+    "engagement_rate_by_views": "Por views de Reels",
+}
+_STATUS_LABELS = {"ok": "Disponível", "indisponivel": "Indisponível nesta amostra"}
+
+
+def _fmt_provenance_value(value):
+    try:
+        return f"{value:.2f}%"
+    except (TypeError, ValueError):
+        return "N/D"
+
+
+def _provenance_rows(audit_report):
+    """Uma linha por taxa de engajamento do contrato canônico, na ordem fixa
+    do dicionário de labels acima. `audit_report` ausente (analyses geradas
+    antes da Sprint 002 Fase 2, ou qualquer falha ao computá-lo) -> lista
+    vazia, nunca lança exceção."""
+    if not audit_report:
+        return []
+    metrics_map = audit_report.get("metrics") or {}
+
+    rows = []
+    for field, calculo in _ENGAGEMENT_RATE_PROVENANCE_LABELS.items():
+        metric = metrics_map.get(field) or {}
+        status = metric.get("status") or "indisponivel"
+        rows.append(
+            {
+                "calculo": calculo,
+                "valor": _fmt_provenance_value(metric.get("value")),
+                "status": _STATUS_LABELS.get(status, status),
+                "fonte": metric.get("source") or "N/D",
+                "confianca": metric.get("confidence") or "N/D",
+                "ressalvas": metric.get("ressalvas") or [],
+            }
+        )
+    return rows
+
+
 def generate_html_report(analysis: dict) -> str:
     """Gera um relatório HTML autocontido (CSS inline, sem CDN externo)."""
 
@@ -145,6 +191,36 @@ def generate_html_report(analysis: dict) -> str:
     else:
         parecer_section = ""
 
+    provenance_rows = _provenance_rows(analysis.get("audit_report"))
+    if provenance_rows:
+        provenance_html = "".join(
+            "<tr>"
+            f"<td>{html_lib.escape(row['calculo'])}</td>"
+            f"<td>{html_lib.escape(row['valor'])}</td>"
+            f"<td>{html_lib.escape(row['status'])}</td>"
+            f"<td>{html_lib.escape(str(row['fonte']))}</td>"
+            f"<td>{html_lib.escape(str(row['confianca']))}</td>"
+            "</tr>"
+            for row in provenance_rows
+        )
+        ressalvas_html = "".join(
+            f"<li>{html_lib.escape(row['calculo'])}: {html_lib.escape(ressalva)}</li>"
+            for row in provenance_rows
+            for ressalva in row["ressalvas"]
+        )
+        provenance_section = f"""
+        <table>
+            <thead><tr><th>Tipo de cálculo</th><th>Valor</th><th>Status</th><th>Fonte</th><th>Confiança</th></tr></thead>
+            <tbody>{provenance_html}</tbody>
+        </table>
+        {f"<ul>{ressalvas_html}</ul>" if ressalvas_html else ""}
+        """
+    else:
+        provenance_section = (
+            "<p class='placeholder'>Contrato canônico de métricas ainda não disponível para este relatório "
+            "(análise gerada antes da Sprint 002 Fase 2, ou falha ao computá-lo).</p>"
+        )
+
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -193,6 +269,9 @@ def generate_html_report(analysis: dict) -> str:
   {parecer_section}
   {gemini_section}
 
+  <h2>Proveniência e Escopo das Métricas</h2>
+  {provenance_section}
+
   <footer>Relatório gerado localmente por métricaDODÔ. Nenhum dado enviado a terceiros neste export.</footer>
 </body>
 </html>
@@ -222,6 +301,7 @@ def generate_pdf_report(analysis: dict) -> bytes:
     qualificados = comentarios.get("qualificados", 0)
     gemini_items = comentarios.get("gemini_items", []) or []
     parecer_comercial = comentarios.get("parecer_comercial")
+    provenance_rows = _provenance_rows(analysis.get("audit_report"))
 
     pdf = FPDF()
     pdf.set_title(_pdf_safe(f"Relatorio DODO - {username}"))
@@ -309,5 +389,30 @@ def generate_pdf_report(analysis: dict) -> bytes:
             pdf.multi_cell(0, 6, _pdf_safe(texto), new_x="LMARGIN", new_y="NEXT")
     else:
         pdf.multi_cell(0, 6, _pdf_safe(GEMINI_NAO_CONFIGURADO_MSG))
+    pdf.ln(2)
+
+    pdf.set_font("helvetica", "B", 12)
+    pdf.cell(0, 8, "Proveniencia e Escopo das Metricas", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "", 10)
+    if provenance_rows:
+        for row in provenance_rows:
+            texto = (
+                f"- {row['calculo']}: {row['valor']} | status: {row['status']} "
+                f"| fonte: {row['fonte']} | confianca: {row['confianca']}"
+            )
+            pdf.multi_cell(0, 6, _pdf_safe(texto), new_x="LMARGIN", new_y="NEXT")
+            for ressalva in row["ressalvas"]:
+                pdf.set_font("helvetica", "I", 9)
+                pdf.multi_cell(0, 5, _pdf_safe(f"  Ressalva: {ressalva}"), new_x="LMARGIN", new_y="NEXT")
+                pdf.set_font("helvetica", "", 10)
+    else:
+        pdf.multi_cell(
+            0,
+            6,
+            _pdf_safe(
+                "Contrato canonico de metricas ainda nao disponivel para este relatorio "
+                "(analise gerada antes da Sprint 002 Fase 2, ou falha ao computa-lo)."
+            ),
+        )
 
     return bytes(pdf.output())

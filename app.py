@@ -188,12 +188,24 @@ def demo_fetch_fn(username, cookies=None):
         is_sponsored = i % 3 == 0
         caption = rng.choice(DEMO_CAPTION_TEMPLATES_SPONSORED if is_sponsored else DEMO_CAPTION_TEMPLATES_ORGANIC)
         shortcode = f"demo{username}{i}"
+        # Alterna os 3 formatos do benchmark (BENCHMARK-001.md §4.2) para que o
+        # Modo Demonstração exercite engagement_rate_by_views (Reels) fim a fim,
+        # sem depender de credenciais reais: 2 Reels em cada janela de 6 posts.
+        media_type = ("CAROUSEL", "REEL", "IMAGE")[i % 3]
+        is_video = media_type == "REEL"
         posts.append(
             {
                 "post_id": f"demo_post_{i}",
                 "likes_count": rng.randint(200, 2000),
                 "comments_count": len(comments),
-                "raw": {"comments": comments, "caption": caption, "shortcode": shortcode},
+                "raw": {
+                    "comments": comments,
+                    "caption": caption,
+                    "shortcode": shortcode,
+                    "media_type": media_type,
+                    "is_video": is_video,
+                    "video_view_count": rng.randint(3000, 20000) if is_video else None,
+                },
             }
         )
     return {
@@ -404,6 +416,13 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
 
         pod_result = metrics.calc_pod_index(metrics_posts)
         engagement_rate = scoring.calc_engagement_rate(engagement_posts, followers_count)
+        # Contrato canônico de auditoria (Sprint 002 §6/§7, ISSUE-001.md §6.2) —
+        # aditivo: usa os `posts` originais (com `raw.is_video`/`raw.video_view_count`
+        # já populados por scraper.instaloader_fetch_fn/demo_fetch_fn), não os
+        # `engagement_posts` simplificados de cima. Não substitui `engagement_rate`
+        # (float legado consumido por app.py/src/exporter.py).
+        audit_report = metrics.build_audit_report(posts, followers_count)
+        database.save_audit_report(username, audit_report)
         average_engagement = metrics.calc_average_engagement(engagement_posts)
         fake_followers_estimate = metrics.estimate_fake_followers_risk(
             engagement_rate, followers_count, pod_result["pod_index"]
@@ -471,6 +490,7 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
                 "parecer_comercial": parecer_comercial,
             },
             "campaign_insights": campaign_insights,
+            "audit_report": audit_report,
         }
 
         state["analysis"] = analysis

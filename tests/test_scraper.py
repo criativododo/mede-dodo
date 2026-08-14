@@ -225,6 +225,7 @@ class FakePost:
     def __init__(
         self, mediaid, shortcode, caption, likes, comments_count, date_utc,
         comments=None, comments_error=None, context=None,
+        typename="GraphImage", is_video=False, video_view_count=None,
     ):
         self.mediaid = mediaid
         self.shortcode = shortcode
@@ -235,6 +236,9 @@ class FakePost:
         self._comments = comments or []
         self._comments_error = comments_error
         self._context = context
+        self.typename = typename
+        self.is_video = is_video
+        self.video_view_count = video_view_count
 
     def get_comments(self):
         def _generator():
@@ -288,6 +292,108 @@ def test_instaloader_fetch_fn_maps_profile_and_posts_without_network(monkeypatch
     assert result["posts"][0]["post_id"] == "1"
     assert result["posts"][0]["likes_count"] == 10
     assert result["posts"][0]["comments_count"] == 2
+
+
+def test_instaloader_fetch_fn_extracts_media_type_is_video_and_view_count_for_reel(monkeypatch):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+            reel = FakePost(
+                1, "abc", "legenda", 10, 2, recent,
+                typename="GraphVideo", is_video=True, video_view_count=5000,
+            )
+            return iter([reel])
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    raw = result["posts"][0]["raw"]
+    assert raw["media_type"] == "REEL"
+    assert raw["is_video"] is True
+    assert raw["video_view_count"] == 5000
+
+
+def test_instaloader_fetch_fn_extracts_media_type_image_for_default_post(monkeypatch):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+            return iter([FakePost(1, "abc", "legenda", 10, 2, recent)])
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    raw = result["posts"][0]["raw"]
+    assert raw["media_type"] == "IMAGE"
+    assert raw["is_video"] is False
+    assert raw["video_view_count"] is None
+
+
+def test_instaloader_fetch_fn_extracts_media_type_carousel(monkeypatch):
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+            return iter([FakePost(1, "abc", "legenda", 10, 2, recent, typename="GraphSidecar")])
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    assert result["posts"][0]["raw"]["media_type"] == "CAROUSEL"
+
+
+def test_instaloader_fetch_fn_media_metadata_never_raises_when_attributes_are_unstable(monkeypatch):
+    class BrokenAttrPost(FakePost):
+        @property
+        def is_video(self):
+            raise KeyError("is_video ausente na resposta do Instagram")
+
+        @is_video.setter
+        def is_video(self, value):
+            pass  # ignora o valor setado por FakePost.__init__
+
+        @property
+        def typename(self):
+            raise KeyError("__typename ausente na resposta do Instagram")
+
+        @typename.setter
+        def typename(self, value):
+            pass
+
+    class FakeProfile:
+        username = "perfil_fake"
+        biography = "bio fake"
+        followers = 1234
+
+        @staticmethod
+        def get_posts():
+            recent = datetime.now(timezone.utc) - timedelta(days=1)
+            return iter([BrokenAttrPost(1, "abc", "legenda", 10, 2, recent)])
+
+    _patch_fake_profile(monkeypatch, FakeProfile())
+
+    result = scraper.instaloader_fetch_fn("perfil_fake", cookies=None)
+
+    raw = result["posts"][0]["raw"]
+    assert raw["media_type"] == "IMAGE"
+    assert raw["is_video"] is False
+    assert raw["video_view_count"] is None
 
 
 def test_instaloader_fetch_fn_extracts_real_comments_with_username_and_text(monkeypatch):

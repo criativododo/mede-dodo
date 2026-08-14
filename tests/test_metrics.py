@@ -251,23 +251,23 @@ def test_calc_engagement_rate_by_reach_ignores_posts_without_reach_but_uses_the_
 
 def test_calc_engagement_rate_by_views_computes_total_interactions_over_total_views_for_reels():
     posts = [
-        {"likes_count": 100, "comments_count": 10, "post_type": "reel", "views_count": 5000},
-        {"likes_count": 50, "comments_count": 5, "post_type": "reel", "views_count": 2000},
-        {"likes_count": 30, "comments_count": 3, "post_type": "photo"},
+        {"likes_count": 100, "comments_count": 10, "raw": {"is_video": True, "video_view_count": 5000}},
+        {"likes_count": 50, "comments_count": 5, "raw": {"is_video": True, "video_view_count": 2000}},
+        {"likes_count": 30, "comments_count": 3, "raw": {"is_video": False, "video_view_count": None}},
     ]
 
     result = metrics.calc_engagement_rate_by_views(posts)
 
     assert result["value"] == (165 / 7000) * 100
     assert result["kind"] == "derived"
-    assert result["source"] == "post_level_reel_views"
-    assert result["denominator"] == "views_count"
+    assert result["source"] == "post_level_video_view_count"
+    assert result["denominator"] == "video_view_count"
     assert result["post_count"] == 2
     assert result["status"] == "ok"
 
 
-def test_calc_engagement_rate_by_views_returns_none_when_no_reels_in_sample():
-    posts = [{"likes_count": 100, "comments_count": 10, "post_type": "photo"}]
+def test_calc_engagement_rate_by_views_returns_none_when_no_video_in_sample():
+    posts = [{"likes_count": 100, "comments_count": 10, "raw": {"is_video": False}}]
 
     result = metrics.calc_engagement_rate_by_views(posts)
 
@@ -275,8 +275,17 @@ def test_calc_engagement_rate_by_views_returns_none_when_no_reels_in_sample():
     assert result["status"] == "indisponivel"
 
 
-def test_calc_engagement_rate_by_views_returns_none_when_reel_has_no_views_count():
-    posts = [{"likes_count": 100, "comments_count": 10, "post_type": "reel"}]
+def test_calc_engagement_rate_by_views_returns_none_when_video_has_no_view_count():
+    posts = [{"likes_count": 100, "comments_count": 10, "raw": {"is_video": True, "video_view_count": None}}]
+
+    result = metrics.calc_engagement_rate_by_views(posts)
+
+    assert result["value"] is None
+    assert result["status"] == "indisponivel"
+
+
+def test_calc_engagement_rate_by_views_returns_none_when_post_has_no_raw_dict():
+    posts = [{"likes_count": 100, "comments_count": 10}]
 
     result = metrics.calc_engagement_rate_by_views(posts)
 
@@ -346,8 +355,7 @@ def test_build_audit_report_computes_reach_and_views_when_data_is_present():
             "likes_count": 100,
             "comments_count": 10,
             "estimated_reach": 2000,
-            "post_type": "reel",
-            "views_count": 5000,
+            "raw": {"is_video": True, "video_view_count": 5000},
         },
     ]
 

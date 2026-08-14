@@ -86,6 +86,74 @@ def test_get_cached_data_treats_legacy_row_without_source_as_cache_miss_for_expl
     assert database.get_cached_data("perfil_legado", window_days=None, db_path=db_path) is not None
 
 
+def test_save_audit_report_persists_and_is_returned_by_get_cached_data(tmp_path):
+    db_path = make_temp_db(tmp_path)
+    database.save_profile_data(
+        "perfil_a",
+        posts=[{"post_id": "1", "raw": {}, "likes_count": 1, "comments_count": 1}],
+        followers_count=1000,
+        db_path=db_path,
+    )
+    audit_report = {
+        "metrics": {
+            "engagement_rate_by_followers": {
+                "value": 8.25,
+                "kind": "derived",
+                "source": "local_scraper_sample",
+                "confidence": "high",
+                "status": "ok",
+                "ressalvas": [],
+            },
+        },
+        "provenance": [
+            {"field": "engagement_rate_by_followers", "kind": "derived", "source": "local_scraper_sample",
+             "confidence": "high", "status": "ok"},
+        ],
+    }
+
+    database.save_audit_report("perfil_a", audit_report, db_path=db_path)
+
+    cached = database.get_cached_data("perfil_a", window_days=None, db_path=db_path)
+    assert cached["audit_report"] == audit_report
+
+
+def test_get_cached_data_returns_none_audit_report_when_never_saved(tmp_path):
+    db_path = make_temp_db(tmp_path)
+    database.save_profile_data(
+        "perfil_a",
+        posts=[{"post_id": "1", "raw": {}, "likes_count": 1, "comments_count": 1}],
+        db_path=db_path,
+    )
+
+    cached = database.get_cached_data("perfil_a", window_days=None, db_path=db_path)
+
+    assert cached["audit_report"] is None
+
+
+def test_save_audit_report_does_not_affect_posts_cache(tmp_path):
+    db_path = make_temp_db(tmp_path)
+    database.save_profile_data(
+        "perfil_a",
+        posts=[{"post_id": "1", "raw": {"caption": "oi"}, "likes_count": 5, "comments_count": 2}],
+        db_path=db_path,
+    )
+
+    database.save_audit_report("perfil_a", {"metrics": {}, "provenance": []}, db_path=db_path)
+
+    cached = database.get_cached_data("perfil_a", window_days=None, db_path=db_path)
+    assert len(cached["posts"]) == 1
+    assert cached["posts"][0]["post_id"] == "1"
+    assert cached["posts"][0]["likes_count"] == 5
+
+
+def test_save_audit_report_is_safe_when_profile_was_never_saved(tmp_path):
+    db_path = make_temp_db(tmp_path)
+
+    database.save_audit_report("perfil_inexistente", {"metrics": {}, "provenance": []}, db_path=db_path)
+
+    assert database.get_cached_data("perfil_inexistente", window_days=None, db_path=db_path) is None
+
+
 def test_save_profile_data_replaces_previous_posts_snapshot_instead_of_accumulating(tmp_path):
     """Regressão: sem isso, uma raspagem real feita depois de uma raspagem em
     Modo Demonstração (post_ids diferentes, sem colisão) apenas ACRESCENTA
