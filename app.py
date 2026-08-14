@@ -11,6 +11,7 @@ thread principal apenas faz polling/rerun para atualizar a barra de progresso,
 nunca bloqueia esperando a raspagem terminar.
 """
 
+import functools
 import json
 import os
 import random
@@ -26,6 +27,7 @@ load_dotenv()
 import streamlit as st
 
 from src import data_loaders, database, demographics, exporter, filters, metrics, scoring, scraper
+from src import rate_controller
 from src.gemini_analyzer import (
     ADERENCIA_INDICADOR_LABELS,
     INTENCAO_COMPRA_NIVEIS,
@@ -56,6 +58,11 @@ COLETA_INDISPONIVEL_MSG = (
     "Falha na coleta do Instagram. Verifique o arquivo de sessão local ou "
     "aguarde alguns minutos antes de tentar novamente."
 )
+
+# FINDER-003 §6: mensagem mínima obrigatória quando o rate controller para a
+# coleta por 429/403/challenge/checkpoint — texto vem de rate_controller para
+# não duplicar a string em dois lugares.
+SAFE_STOP_MSG = rate_controller.SAFETY_MESSAGE
 
 PIPELINE_STEPS = {
     "coleta": ("Coletando/consultando cache local...", 0.10),
@@ -291,6 +298,14 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
         # único, fora deste código) — sem isso, a coleta real ainda tenta rodar sem
         # sessão e cai no fallback de cache/erro tratado abaixo se falhar.
         cookies = None if demo_mode else os.environ.get("INSTAGRAM_SESSION_FILE")
+        if not demo_mode:
+            # Pacing real por post + SafeStop em 429/403/challenge (FINDER-003 §4) —
+            # nunca ligado em modo demonstração (sem rede, sem jitter, §2.2).
+            fetch_fn = functools.partial(
+                fetch_fn,
+                rate_controller=rate_controller.RateController(),
+                on_progress=_make_coleta_progress_callback(state),
+            )
         try:
             cached = scraper.scrape_profile(
                 username,
@@ -302,6 +317,10 @@ def _run_pipeline(username, window_days, demo_mode, gemini_client, state):
             )
         except NotImplementedError:
             state["status"] = "erro_scraping_nao_implementado"
+            return
+        except rate_controller.SafeStop as exc:
+            state["status"] = "pausado_seguranca"
+            state["erro"] = str(exc)
             return
         except scraper.ScraperUnavailableError as exc:
             state["status"] = "erro_coleta_indisponivel"
@@ -814,11 +833,16 @@ def main():
 
     if status == "rodando":
         etapa = state.get("etapa", "coleta")
-        texto_etapa, progresso_padrao = PIPELINE_STEPS.get(etapa, ("Processando...", 0.0))
+        texto_etapa_padrao, progresso_padrao = PIPELINE_STEPS.get(etapa, ("Processando...", 0.0))
+        texto_etapa = state.get("mensagem") or texto_etapa_padrao
         progresso = state.get("progresso", progresso_padrao)
-        st.progress(progresso, text=texto_etapa)
+        eta_seconds = state.get("eta_seconds")
+        label = f"{texto_etapa} (~{_format_eta(eta_seconds)} restantes)" if eta_seconds is not None else texto_etapa
+        st.progress(progresso, text=label)
         time.sleep(0.3)
         st.rerun()
+    elif status == "pausado_seguranca":
+        st.warning(state.get("erro", SAFE_STOP_MSG))
     elif status == "erro_scraping_nao_implementado":
         st.warning(RASPAGEM_NAO_IMPLEMENTADA_MSG)
     elif status == "erro_coleta_indisponivel":

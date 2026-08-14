@@ -298,6 +298,40 @@ def test_app_renders_new_audience_metric_cards_when_gemini_configured(monkeypatc
     assert any("qualificados" in label.lower() for label in metric_labels)
 
 
+def test_app_shows_safety_message_when_pipeline_reports_pausado_seguranca(monkeypatch):
+    # AppTest-based: precisa ficar ANTES do bloco de testes que fazem `import app`
+    # bare (a partir daqui para baixo) — import bare roda main() fora de um
+    # ScriptRunContext real e deixa lixo de estado de formulário do Streamlit,
+    # quebrando qualquer AppTest.from_file() chamado depois (ver nota em
+    # test_limpar_cache_button_clears_cached_profile_before_reanalyzing).
+    from src import rate_controller, scraper
+
+    def _raise_safe_stop(*args, **kwargs):
+        raise rate_controller.SafeStop(reason="http_429")
+
+    monkeypatch.setattr(scraper, "scrape_profile", _raise_safe_stop)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.text_input(key="username_input").set_value(f"perfil_safe_stop_{uuid.uuid4().hex}")
+    at.toggle(key="demo_mode_toggle").set_value(False)
+    at.button[0].click().run()
+
+    max_reruns = 50
+    for _ in range(max_reruns):
+        assert not at.exception
+        status = at.session_state["pipeline_state"].get("status")
+        if status != "rodando":
+            break
+        at.run()
+
+    assert not at.exception
+    assert at.session_state["pipeline_state"]["status"] == "pausado_seguranca"
+    warning_values = [w.value for w in at.warning]
+    assert any(rate_controller.SAFETY_MESSAGE in value for value in warning_values)
+
+
 def test_run_pipeline_detects_sponsored_posts_in_demo_mode():
     """RF-09: em Modo Demonstração, ao menos uma publi de exemplo deve ser
     detectada nas legendas geradas localmente (prova de que o pipeline real
@@ -631,3 +665,19 @@ def test_make_coleta_progress_callback_updates_state_progressively():
     assert "2/4" in state["mensagem"]
     assert state["eta_seconds"] is not None
     assert state["eta_seconds"] >= 0
+
+
+def test_run_pipeline_sets_pausado_seguranca_status_when_scrape_profile_raises_safe_stop(monkeypatch):
+    import app
+    from src import rate_controller, scraper
+
+    def _raise_safe_stop(*args, **kwargs):
+        raise rate_controller.SafeStop(reason="http_429")
+
+    monkeypatch.setattr(scraper, "scrape_profile", _raise_safe_stop)
+
+    state = {}
+    app._run_pipeline("perfil_qualquer", 90, False, None, state)
+
+    assert state["status"] == "pausado_seguranca"
+    assert state["erro"] == rate_controller.SAFETY_MESSAGE
