@@ -30,20 +30,25 @@ Este projeto ainda não é um repositório Git formal. O kit exige um repositór
 - Este projeto resolve seu próprio `projectId` e nunca compartilha pasta de memória com outro subprojeto de `~/0. PROJETO/`.
 - `/fim` opera em worktree temporário próprio do repositório de memória e o remove ao concluir. Nunca editar `~/criativododo-memory` manualmente para contornar uma falha de validação — corrigir a causa e repetir `/fim`.
 
-## Sincronização com o Google Drive
+## Sincronização seletiva com o Google Drive
 
-Ativada em 12/08/2026 — mapeamento aponta para a pasta `mede-dodo` no Drive, seguindo o
-mesmo padrão de espelho já usado por `dita-dodo` (`docs/` achatado + `PROGRESS.md`,
-`TIMELINE.md`, `README.md`, `DUMMY.md`, `specs/`, `decisions/`, na raiz do espelho;
-`CLAUDE.md` e skills `.claude/` nunca são espelhados, por não serem conhecimento de
-produto). URL web da pasta, só para referência humana (não lida pelo parser):
-`https://drive.google.com/drive/folders/1ytT3dHcVfqnSeggYqPB-VINlndJHInV4?usp=drive_link`.
-Caderno correspondente no NotebookLM (`notebooklm_url` abaixo, lido pela skill `/drive`
-para exibir o link no relatório de sincronização — não há integração automática de
-upload, apenas o vínculo por link):
-`https://notebook.google.com/notebook/62f4b450-72af-4b89-b32a-b05c91765b96`.
+A sincronização `/drive` é **unidirecional**: somente o checkout local envia arquivos para o espelho do Google Drive, que alimenta o contexto normativo do Gemini Spark. O comando não baixa alterações do Drive e não deve ser usado para sincronizar dados brutos, credenciais ou histórico legado.
 
 ```google_drive_sync
+drive_url: https://drive.google.com/drive/folders/1ytT3dHcVfqnSeggYqPB-VINlndJHInV4?usp=drive_link
 path: /Users/danielperrut/Library/CloudStorage/GoogleDrive-criativododo@gmail.com/Meu Drive/0. SISTEMA D/sub-projects/mede-dodo
-notebooklm_url: https://notebook.google.com/notebook/62f4b450-72af-4b89-b32a-b05c91765b96
+direction: local_to_drive
+mode: selective_whitelist
 ```
+
+### Whitelist de sincronização
+
+- `README.md`, `DUMMY.md`, `PROGRESS.md` e `FINDER-001.md` na raiz;
+- todos os arquivos ativos em `specs/`;
+- todos os arquivos em `decisions/`;
+- todos os arquivos em `docs/issues/`;
+- todos os arquivos `BENCHMARK-METRICS-*.md` na raiz.
+
+### Blacklist obrigatória
+
+Nunca sincronizar `/legado/`, `/data/`, `.env`, sessões do Instaloader, `.git/`, `__pycache__/`, `.pytest_cache/`, `venv/`, `.DS_Store` ou qualquer credencial, cache, segredo ou diretório de sistema. O próprio `CLAUDE.md` permanece local e não faz parte da whitelist.

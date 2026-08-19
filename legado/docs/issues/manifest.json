@@ -1,0 +1,74 @@
+{
+  "issues": [
+    {
+      "id": "ISSUE-0001",
+      "title": "Módulo de Coleta Local e Cache SQLite",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0001.md",
+      "notas": "Cache SQLite, throttling e orquestração implementados e testados. instaloader_fetch_fn real (sessão local por arquivo de cookies) implementado e integrado ao pipeline de app.py como fetch_fn fora do Modo Demonstração, com fallback gracioso de cache (ScraperUnavailableError tratado na UI). Reparo na ISSUE-0008: instaloader_fetch_fn agora também busca comentários reais (autor/texto/resposta da criadora via post.get_comments()) e captura a data real de publicação de cada post. Reparo em 2026-08-12 (gargalos de login): load_any_available_session(L) autodetecta e carrega ~/.config/instaloader/session-* sem depender de INSTAGRAM_SESSION_FILE; corrigido bug de identidade trocada em load_session_from_file; sidebar do Streamlit mostra 'Sessão ativa: <usuario>'; instaloader adicionado a requirements.txt. Validação ao vivo em 2026-08-12 revisou a hipótese original do Erro HTTP 400: Profile.from_username() (instaloader==4.15.3) usa sempre o endpoint web_profile_info, e esse endpoint tem um bug atual no backend do próprio Instagram (schema 'ig_business_category_subvertical' removido) para @silviabraz; @caroline_tanaka falhava ao buscar comentários via endpoint do app iPhone. CONTORNO implementado e VALIDADO AO VIVO em seguida, no mesmo dia (por pedido explícito do usuário): corrigido o tipo real da exceção do bug de schema (QueryReturnedBadRequestException, não capturada antes); _resolve_profile_via_topsearch resolve o perfil via TopSearchResults (endpoint diferente) quando logado e web_profile_info falha com o bug de schema; _fetch_comments_first_page_via_graphql busca a 1ª página de comentários via GraphQL direto quando o endpoint do app iPhone falha sem coletar nada; corrigido bug adicional de posts fixados (pinned) antigos escondendo posts recentes reais. Validado ao vivo contra @silviabraz (antes falhava 100%, agora resolve com sucesso, 60 posts coletados) e @caroline_tanaka (confirmou que o endpoint de comentários do app iPhone falha em 100% dos posts amostrados — não é rate-limit pontual —, mas o fallback via GraphQL recuperou comentários reais em todos eles, 56 posts coletados). Status 'concluida': os dois bugs de backend do Instagram identificados têm contorno funcional validado no lado do cliente — ver seções 'Contorno para o bug de schema e para comentários' e 'Validação ao vivo do contorno' em ISSUE-0001.md."
+    },
+    {
+      "id": "ISSUE-0002",
+      "title": "Filtragem Heurística e Demografia Local",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0002.md",
+      "notas": "src/filters.py e src/demographics.py implementados e testados (12/12 testes). Bases melhores (nomes/DDD) entregues na ISSUE-0006."
+    },
+    {
+      "id": "ISSUE-0003",
+      "title": "Processamento Gemini em Lote",
+      "status": "parcial",
+      "file": "docs/issues/ISSUE-0003.md",
+      "notas": "src/gemini_analyzer.py implementado e testado com cliente mockado. RealGeminiClient real (SDK google.genai, JSON estruturado, GeminiRateLimitError para cota) implementado e integrado ao pipeline de app.py (instanciado quando GEMINI_API_KEY está definida; ausência tratada graciosamente). Status permanece 'parcial' apenas porque a chamada real à API não foi testada neste ambiente (sem GEMINI_API_KEY disponível). Índice de repetição/pods deliberadamente fora do schema (ver ISSUE-0003.md) — cálculo local entregue na ISSUE-0005. Reparo em 2026-08-13: RealGeminiClient.generate_content passou a fazer retry com backoff exponencial (2s/4s/8s, até 3 retries) para erros temporários 429 (cota) e 503 'UNAVAILABLE — high demand', encontrado ao vivo no Streamlit; erros não retryable continuam subindo direto. Refinamento de qualidade em 2026-08-13: prompt do Gemini passou a pedir categoria_sentimento e sinais_compra por comentário (grounded em pesquisa de mercado real via WebSearch), nova função pura summarize_brand_suitability calcula localmente (sem chamada extra de API) um parecer de aderência comercial exibido em app.py/exporter.py; filtro local (src/filters.py) ganhou detecção de elogio genérico decorado e de comentários bot-like/spam. Layout Streamlit de app.py preservado integralmente. Ver seções 'Reparo (2026-08-13)' e 'Refinamento de qualidade (2026-08-13)' em ISSUE-0003.md. 162/162 testes passando."
+    },
+    {
+      "id": "ISSUE-0004",
+      "title": "Dashboard Streamlit e Exportador",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0004.md",
+      "notas": "app.py (pipeline em thread de background, Modo Demonstração, cards, export HTML/PDF, conectores reais de scraper e Gemini integrados) e src/exporter.py implementados e testados (74/74 na suíte completa). Boot real validado via AppTest. Bug real de PDF corrigido via TDD (FPDFException ao renderizar 2+ itens do Gemini/publis por multi_cell sem new_x/new_y explícitos em loop). RF-09 (publis) resolvida na ISSUE-0007."
+    },
+    {
+      "id": "ISSUE-0005",
+      "title": "Métricas de Antifraude (Pods) e Score DODÔ",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0005.md",
+      "notas": "src/metrics.py (calc_pod_index) e src/scoring.py (calc_engagement_rate, calc_dodo_score) implementados e testados (15/15 testes). Pesos do score são heurística de engenharia, não calibrada com dados reais de campanha."
+    },
+    {
+      "id": "ISSUE-0006",
+      "title": "Bases Locais de Demografia (Nomes e DDD)",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0006.md",
+      "notas": "src/data_loaders.py implementado e testado (7/7 testes). 1.984 nomes (base curada, fonte comunitária citando API do IBGE) e 67 DDD→UF (fonte web, não validada contra ANATEL oficial — site indisponível na sessão)."
+    },
+    {
+      "id": "ISSUE-0007",
+      "title": "Varredura de Publis (RF-09)",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0007.md",
+      "notas": "detect_sponsored_posts (src/filters.py) implementado e integrado ao pipeline de app.py, substituindo a lista fixa de publis por regex local sobre as legendas coletadas (#publi, #ad, parceria, patrocinado, menção @marca). demo_fetch_fn passou a gerar legendas de exemplo (algumas patrocinadas) para validar o fluxo completo sem rede. UI (_render_publis_card) e exportador (src/exporter.py) deixaram de exibir texto de 'não implementado' — mostram a tabela real ou um estado vazio genuíno. 84/84 testes passando na suíte completa."
+    },
+    {
+      "id": "ISSUE-0008",
+      "title": "Ancoragem na Realidade Física — Reparo do Pipeline de Dados Reais",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0008.md",
+      "notas": "Causa raiz encontrada via investigação sistemática (não a hipótese inicial de 'nome não higienizado'): instaloader_fetch_fn (src/scraper.py) nunca chamava post.get_comments() — só capturava metadados agregados de post (likes, contagem de comentários como int), então RF-05/06/07/08 recebiam lista vazia de comentários para todo perfil real (gênero saía 'indeterminado', não invertido). Corrigido: (1) instaloader_fetch_fn agora busca comentários reais (username/texto/respondido) e a data real de publicação de cada post, respeitando janela de 90 dias e teto de segurança de 60 posts; (2) extract_first_name_from_handle (src/demographics.py) deriva um candidato a primeiro nome de um @handle ('ana_silva92' -> 'ana') sem chamada de rede extra, usado quando o comentário real não tem 'nome' explícito; (3) app.py passou a filtrar posts pela data real de publicação dentro da window_days selecionada (30/60/90), corrigindo a Taxa de Engajamento Real (TER) para refletir só os posts realmente publicados na janela, não os últimos N posts raspados independente da idade. Validado com teste E2E simulando a API do Instaloader fim-a-fim (comentários, janela, gênero, TER, publis). 96/96 testes passando na suíte completa."
+    },
+    {
+      "id": "ISSUE-0010",
+      "title": "Sprint 004 — UI/UX e Engenharia de Produto do Relatório métricaDODÔ (SPEC-005)",
+      "status": "concluida",
+      "file": "docs/issues/ISSUE-0010.md",
+      "notas": "Implementação da SPEC-005 concluída seguindo o fatiamento A (fixtures/contratos) → B (métricas em src/) → C (view/app.py) → D (validação/exportação). SPEC-005.md, ISSUE-0010.md, FINDER-004/005/006.md trazidos da pasta espelhada do Drive para o repositório nesta abertura. Fase A: 24 testes escritos e confirmados em estado 'red' antes da implementação (tests/test_demographics.py, tests/test_metrics.py). Fase B: demographics.summarize_gender_distribution_valid (denominador de gênero pela amostra reconhecida, aditivo, sem quebrar o contrato legado), metrics.calculate_format_metrics (Reels/Carrossel/Estático com n/likes médios/comentários médios/ER próprios), metrics.calibrate_authenticity_composition (base_real_pct/suspeito_pct/desconhecido_pct com piso proporcional à amostra), aliases de thread em calc_creator_response_rate_metric; build_audit_report de 12 para 13 campos. Fase C: Score DODÔ/parecer comercial removidos do topo de app.py e movidos para 'Detalhes da auditoria' rotulados como legado/derivado; _render_format_performance reescrita com 3 cards comparáveis; _render_audience_profile com barras horizontais da composição de gênero corrigida. Fase D: suíte completa 337/337 verde (0 regressões nos 305 testes preexistentes); validação visual manual via Playwright contra streamlit run app.py em Modo Demonstração, desktop (1440x1000) e viewport estreito (390x844), console sem erros — confirmação visual de que o topo não mostra mais Score DODÔ, os 3 cards de formato têm dados reais e as barras de gênero somam corretamente. Pendências registradas em PROGRESS.md: (1) o KPI 'Autenticidade da audiência' nos KPIs principais ainda exibe o value legado em vez de base_real_pct — fora do escopo explícito desta rodada; (2) nenhum commit foi feito (regra de governança do DUMMY.md/ISSUE-0010 — aprovação do usuário necessária antes de incorporar ao histórico Git)."
+    },
+    {
+      "id": "ISSUE-0011",
+      "title": "Sprint 005 — Estados de fluxo, ações rápidas e paridade visual com o protótipo Paper (SPEC-006)",
+      "status": "parcial",
+      "file": "docs/issues/ISSUE-0011.md",
+      "notas": "Implementação do protótipo Paper 'mede DODÔ' na tela real: _render_hero_entrada (estado de entrada editorial, só quando ocioso), _render_progress_stage_indicator (3 estágios mapeados de PIPELINE_STEPS), _render_quick_export_actions (Baixar PDF/Exportar CSV no header, sem gate de 'Ver Relatório'), exporter.generate_csv_report (formato longo tidy, novo), _render_parceria_mini_card (avatar circular de iniciais + link real por post, grade de até 4 colunas), aviso de Modo Demonstração realocado do topo do relatório para dentro de 'Detalhes da auditoria', botão '↻ Reanalisar perfil' no rodapé do mesmo expander. Correção de fragilidade pré-existente: app.py chamava main() incondicionalmente na última linha, fazendo qualquer 'import app' bare (já usado por vários testes) reexecutar main() como efeito colateral e deixar um st.form 'aberto' no script-run — corrigido com o idiom padrão 'if __name__ == \"__main__\": main()' (Streamlit executa o script-alvo com __name__=='__main__', então streamlit run/AppTest.from_file não mudam de comportamento). Segunda rodada, pedida após comparação visual direta com o Paper: barra de progresso nativa (st.progress, pipeline e barras de gênero) corrigida de azul nativo para Vermelho Haute via CSS; bio (já coletada por demo_fetch_fn/instaloader_fetch_fn e persistida em database.profiles.bio, nunca propagada) passou a aparecer no header quando existe; avatar circular de inicial adicionado ao lado do @handle. 347/347 testes passando (337 preexistentes + 10 novos). Validação visual manual via Playwright contra streamlit run app.py em Modo Demonstração, desktop 1440x1000, console sem erros. Status 'parcial': paridade visual com o Paper é parcial por decisão deliberada, não por falta de tempo — ver 'Gaps' em ISSUE-0011.md (categoria/localização e avatar-foto não implementados por ausência de dado real no pipeline; grade de hero metrics em 4 colunas não implementada por violar guardrail explícito do SPRINT-003 Safety Shield item 5; links 'Ver post ↗' dentro de st.dataframe/LinkColumn continuam azul nativo, fora do alcance de CSS por serem renderizados em canvas; botão Reanalisar usa a mesma pílula cheia dos outros botões, sem variante ghost no Design System). Nenhum commit foi feito (mesma regra de governança do DUMMY.md aplicada na ISSUE-0010)."
+    }
+  ]
+}

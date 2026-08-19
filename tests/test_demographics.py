@@ -1,286 +1,100 @@
-import os
-import sys
+"""Testes unitários da ISSUE-003: motor de demografia local (gênero e DDD)."""
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src import data_loaders, demographics
-
-CUSTOM_NAMES_DB = {
-    "maria": {"F": 950, "M": 5},
-    "joao": {"F": 2, "M": 900},
-    "alex": {"F": 480, "M": 520},
-}
+from src.features.analise import demographics
 
 
-def test_infer_gender_from_predominantly_female_name():
-    assert demographics.infer_gender("Maria", names_db=CUSTOM_NAMES_DB) == "feminino"
+# --- estimate_gender_distribution -----------------------------------------------------------
 
 
-def test_infer_gender_from_predominantly_male_name():
-    assert demographics.infer_gender("João", names_db=CUSTOM_NAMES_DB) == "masculino"
+def test_common_female_name_classified_as_female():
+    result = demographics.estimate_gender_distribution(["Maria"])
+    assert result == {"female_pct": 100.0, "male_pct": 0.0, "unknown_pct": 0.0, "coverage_pct": 100.0}
 
 
-def test_infer_gender_returns_indeterminado_for_ambiguous_name():
-    assert demographics.infer_gender("Alex", names_db=CUSTOM_NAMES_DB) == "indeterminado"
+def test_common_male_name_classified_as_male():
+    result = demographics.estimate_gender_distribution(["Joao"])
+    assert result == {"female_pct": 0.0, "male_pct": 100.0, "unknown_pct": 0.0, "coverage_pct": 100.0}
 
 
-def test_infer_gender_returns_indeterminado_for_unknown_name():
-    assert demographics.infer_gender("Zyxabc", names_db=CUSTOM_NAMES_DB) == "indeterminado"
+def test_unknown_name_classified_as_indeterminado():
+    result = demographics.estimate_gender_distribution(["xerferaldozz"])
+    assert result == {"female_pct": 0.0, "male_pct": 0.0, "unknown_pct": 100.0, "coverage_pct": 0.0}
 
 
-def test_infer_gender_extracts_first_name_from_full_name():
-    assert demographics.infer_gender("Maria Silva Souza", names_db=CUSTOM_NAMES_DB) == "feminino"
+def test_mixed_sample_percentages_sum_to_100():
+    names = ["Maria", "Joao", "Ana", "xerferaldozz"]
+    result = demographics.estimate_gender_distribution(names)
+
+    assert result["female_pct"] == 50.0  # Maria, Ana
+    assert result["male_pct"] == 25.0  # Joao
+    assert result["unknown_pct"] == 25.0  # xerferaldozz
+    assert round(result["female_pct"] + result["male_pct"] + result["unknown_pct"], 1) == 100.0
+    assert result["coverage_pct"] == 75.0
 
 
-CUSTOM_DDD_TO_UF = {"11": "SP", "21": "RJ", "71": "BA"}
-CUSTOM_REGION_KEYWORDS = {"bahia": "BA", "rio de janeiro": "RJ", "sao paulo": "SP"}
+def test_empty_list_returns_zeroed_contract():
+    result = demographics.estimate_gender_distribution([])
+    assert result == {"female_pct": 0.0, "male_pct": 0.0, "unknown_pct": 0.0, "coverage_pct": 0.0}
 
 
-def test_infer_region_extracts_uf_from_phone_number_ddd():
-    result = demographics.infer_region(
-        "me chama no (11) 91234-5678",
-        ddd_to_uf=CUSTOM_DDD_TO_UF,
-        region_keywords=CUSTOM_REGION_KEYWORDS,
+def test_extracts_first_name_from_full_name():
+    result = demographics.estimate_gender_distribution(["Maria Clara Souza"])
+    assert result["female_pct"] == 100.0
+
+
+def test_extracts_first_name_from_instagram_style_username():
+    result = demographics.estimate_gender_distribution(["maria.santos92"])
+    assert result["female_pct"] == 100.0
+
+
+def test_accented_name_matches_unaccented_dataset():
+    result = demographics.estimate_gender_distribution(["João"])
+    assert result["male_pct"] == 100.0
+
+
+# --- estimate_location_by_ddd -----------------------------------------------------------
+
+
+def test_extracts_valid_ddd_with_parentheses():
+    result = demographics.estimate_location_by_ddd(["Amei! sou de SP (11) 91234-5678"])
+    assert result["top_estados"] == [{"uf": "SP", "mencoes": 1}]
+    assert result["amostra_com_ddd_n"] == 1
+    assert result["coverage_pct"] == 100.0
+
+
+def test_extracts_valid_ddd_without_parentheses():
+    result = demographics.estimate_location_by_ddd(["Contato: 21 98765-4321"])
+    assert result["top_estados"] == [{"uf": "RJ", "mencoes": 1}]
+
+
+def test_ignores_false_positive_numbers():
+    result = demographics.estimate_location_by_ddd(
+        ["Nasci em 1998, moro em BH", "CEP 04578-000 apaixonada por moda", "sem numero nenhum aqui"]
     )
-
-    assert result["por_ddd"] == ["SP"]
-
-
-def test_infer_region_extracts_uf_from_keyword_mention():
-    result = demographics.infer_region(
-        "moro na Bahia, adorei a peça",
-        ddd_to_uf=CUSTOM_DDD_TO_UF,
-        region_keywords=CUSTOM_REGION_KEYWORDS,
-    )
-
-    assert result["por_mencao"] == ["BA"]
+    assert result["top_estados"] == []
+    assert result["amostra_com_ddd_n"] == 0
+    assert result["coverage_pct"] == 0.0
 
 
-def test_infer_region_returns_empty_lists_when_no_match():
-    result = demographics.infer_region(
-        "muito linda a foto",
-        ddd_to_uf=CUSTOM_DDD_TO_UF,
-        region_keywords=CUSTOM_REGION_KEYWORDS,
-    )
-
-    assert result == {"por_ddd": [], "por_mencao": []}
-
-
-PARA_REGION_KEYWORDS = {"para": "PA", "bahia": "BA"}
-
-
-def test_infer_region_does_not_match_preposition_para_as_state():
-    result = demographics.infer_region(
-        "amei, vim aqui para comprar",
-        ddd_to_uf=CUSTOM_DDD_TO_UF,
-        region_keywords=PARA_REGION_KEYWORDS,
-    )
-
-    assert "PA" not in result["por_mencao"]
-
-
-def test_infer_region_matches_para_state_when_accented_in_original_text():
-    result = demographics.infer_region(
-        "moro no Pará, amei a peça",
-        ddd_to_uf=CUSTOM_DDD_TO_UF,
-        region_keywords=PARA_REGION_KEYWORDS,
-    )
-
-    assert "PA" in result["por_mencao"]
-
-
-FEMALE_NAMES_FROM_SPEC = ["Maria", "Ana", "Camila", "Fernanda", "Juliana", "Patricia", "Sofia"]
-
-
-def test_infer_gender_classifies_spec_female_names_as_feminino_using_real_ibge_base():
-    """Prova de integração: o pipeline real (app.py -> data_loaders.load_names_db())
-    usa a base curada do IBGE, não o DEFAULT_NAMES_DB de exemplo. Perfis de
-    moda/lifestyle com comentaristas de nomes tipicamente femininos devem
-    classificar como 'feminino'."""
-    names_db = data_loaders.load_names_db()
-
-    for nome in FEMALE_NAMES_FROM_SPEC:
-        assert demographics.infer_gender(nome, names_db=names_db) == "feminino", nome
-
-
-def test_infer_gender_female_ratio_above_80_percent_for_spec_names_using_real_ibge_base():
-    names_db = data_loaders.load_names_db()
-
-    for nome in FEMALE_NAMES_FROM_SPEC:
-        counts = names_db[demographics._normalize_name(nome)]
-        total = counts["F"] + counts["M"]
-        assert counts["F"] / total > 0.80, nome
-
-
-def test_extract_first_name_from_handle_strips_underscore_suffix():
-    assert demographics.extract_first_name_from_handle("ana_silva92") == "ana"
-
-
-def test_extract_first_name_from_handle_strips_dot_and_digits():
-    assert demographics.extract_first_name_from_handle("joao.pedro99") == "joao"
-
-
-def test_extract_first_name_from_handle_ignores_leading_underscore():
-    assert demographics.extract_first_name_from_handle("_maria2000") == "maria"
-
-
-def test_extract_first_name_from_handle_returns_empty_for_no_letters():
-    assert demographics.extract_first_name_from_handle("12345_") == ""
-
-
-def test_extract_first_name_from_handle_returns_empty_for_falsy_input():
-    assert demographics.extract_first_name_from_handle(None) == ""
-    assert demographics.extract_first_name_from_handle("") == ""
-
-
-def test_extract_first_name_from_handle_feeds_infer_gender_correctly():
-    names_db = data_loaders.load_names_db()
-    nome = demographics.extract_first_name_from_handle("ana_silva92")
-
-    assert demographics.infer_gender(nome, names_db=names_db) == "feminino"
-
-
-def test_extract_name_candidates_from_handle_returns_all_alpha_segments_in_order():
-    assert demographics.extract_name_candidates_from_handle("style_by_ana92") == ["style", "by", "ana"]
-
-
-def test_extract_name_candidates_from_handle_returns_empty_list_for_falsy_input():
-    assert demographics.extract_name_candidates_from_handle(None) == []
-    assert demographics.extract_name_candidates_from_handle("") == []
-
-
-def test_infer_gender_from_handle_uses_first_segment_when_it_is_a_known_name():
-    assert demographics.infer_gender_from_handle("maria_silva92", names_db=CUSTOM_NAMES_DB) == "feminino"
-
-
-def test_infer_gender_from_handle_falls_back_to_later_segment_when_first_is_not_a_name():
-    """Handles reais de moda/lifestyle costumam prefixar o nome com termos
-    genéricos ('style', 'eu', 'oficial'...) — pegar só o primeiro segmento
-    (comportamento antigo) classificaria erroneamente como indeterminado."""
-    assert demographics.infer_gender_from_handle("style_by_maria", names_db=CUSTOM_NAMES_DB) == "feminino"
-    assert demographics.infer_gender_from_handle("its_joao_oficial", names_db=CUSTOM_NAMES_DB) == "masculino"
-
-
-def test_infer_gender_from_handle_returns_indeterminado_when_no_segment_matches():
-    assert demographics.infer_gender_from_handle("xyz_qwerty123", names_db=CUSTOM_NAMES_DB) == "indeterminado"
-
-
-def test_infer_gender_from_handle_returns_indeterminado_for_falsy_input():
-    assert demographics.infer_gender_from_handle(None, names_db=CUSTOM_NAMES_DB) == "indeterminado"
-
-
-FEMALE_FASHION_HANDLES = [
-    "style_by_maria",
-    "its_ana_oficial",
-    "camila.moda92",
-    "eu_juliana_looks",
-    "fernanda_style_",
-    "look.by.patricia",
-]
-
-
-def test_infer_gender_from_handle_classifies_prefixed_fashion_handles_as_feminino_using_real_ibge_base():
-    """Prova de integração RF: perfis femininos de moda/lifestyle devem
-    classificar a amostragem como predominantemente feminina (>80%) mesmo
-    quando os @handles reais trazem prefixos genéricos antes do nome."""
-    names_db = data_loaders.load_names_db()
-
-    resultados = [demographics.infer_gender_from_handle(h, names_db=names_db) for h in FEMALE_FASHION_HANDLES]
-
-    feminino_ratio = resultados.count("feminino") / len(resultados)
-    assert feminino_ratio > 0.8, resultados
-
-
-def test_summarize_region_distribution_returns_proportional_breakdown_sorted_descending():
-    detected_ufs = ["SP", "SP", "SP", "SP", "RJ", "RJ", "RJ", "MG", "MG", "BA"]
-
-    distribution = demographics.summarize_region_distribution(detected_ufs)
-
-    assert distribution == [
-        {"uf": "SP", "pct": 0.4},
-        {"uf": "RJ", "pct": 0.3},
-        {"uf": "MG", "pct": 0.2},
-        {"uf": "BA", "pct": 0.1},
+def test_ranks_top_3_states_by_frequency():
+    text_samples = [
+        "(11) 91111-1111",
+        "(11) 92222-2222",
+        "(21) 93333-3333",
+        "(31) 94444-4444",
+        "sem contato aqui",
     ]
+    result = demographics.estimate_location_by_ddd(text_samples)
+
+    assert result["top_estados"][0] == {"uf": "SP", "mencoes": 2}
+    assert {"uf": "RJ", "mencoes": 1} in result["top_estados"]
+    assert {"uf": "MG", "mencoes": 1} in result["top_estados"]
+    assert len(result["top_estados"]) == 3
+    assert result["amostra_n"] == 5
+    assert result["amostra_com_ddd_n"] == 4
+    assert result["coverage_pct"] == 80.0
 
 
-def test_summarize_region_distribution_returns_empty_list_for_no_detections():
-    assert demographics.summarize_region_distribution([]) == []
-
-
-def test_format_region_distribution_renders_uf_with_rounded_percentage():
-    distribution = [{"uf": "SP", "pct": 0.4}, {"uf": "RJ", "pct": 0.25}, {"uf": "MG", "pct": 0.15}]
-
-    assert demographics.format_region_distribution(distribution) == ["SP (40%)", "RJ (25%)", "MG (15%)"]
-
-
-def test_format_region_distribution_returns_empty_list_for_empty_distribution():
-    assert demographics.format_region_distribution([]) == []
-
-
-def test_summarize_gender_distribution_empty_comments_returns_zeros():
-    result = demographics.summarize_gender_distribution([], names_db=CUSTOM_NAMES_DB)
-
-    assert result == {
-        "counts": {"feminino": 0, "masculino": 0, "indeterminado": 0},
-        "percentuais": {"feminino": 0.0, "masculino": 0.0, "indeterminado": 0.0},
-        "total_identificados": 0,
-        "total_comentarios": 0,
-        "cobertura": 0.0,
-    }
-
-
-def test_summarize_gender_distribution_counts_percentuais_and_coverage():
-    comments = [
-        {"username": "maria_silva"},
-        {"username": "maria2000"},
-        {"username": "joao_pedro"},
-        {"username": "xyz_qwerty123"},
-    ]
-
-    result = demographics.summarize_gender_distribution(comments, names_db=CUSTOM_NAMES_DB)
-
-    assert result["counts"] == {"feminino": 2, "masculino": 1, "indeterminado": 1}
-    assert result["percentuais"] == {"feminino": 0.5, "masculino": 0.25, "indeterminado": 0.25}
-    assert result["total_identificados"] == 3
-    assert result["total_comentarios"] == 4
-    assert result["cobertura"] == 0.75
-
-
-def test_summarize_gender_distribution_prefers_explicit_name_over_handle():
-    comments = [{"nome": "Maria", "username": "joao_desconhecido"}]
-
-    result = demographics.summarize_gender_distribution(comments, names_db=CUSTOM_NAMES_DB)
-
-    assert result["counts"] == {"feminino": 1, "masculino": 0, "indeterminado": 0}
-
-
-def test_summarize_region_distribution_with_coverage_empty_comments_returns_zeros():
-    result = demographics.summarize_region_distribution_with_coverage(
-        [], ddd_to_uf=CUSTOM_DDD_TO_UF, region_keywords=CUSTOM_REGION_KEYWORDS
-    )
-
-    assert result == {
-        "distribuicao": [],
-        "total_comentarios": 0,
-        "comentarios_com_regiao": 0,
-        "cobertura": 0.0,
-    }
-
-
-def test_summarize_region_distribution_with_coverage_computes_distribution_and_coverage():
-    comments = [
-        {"texto": "moro em Sao Paulo"},
-        {"texto": "vim la da Bahia"},
-        {"texto": "amei a peça, sem regiao aqui"},
-        {"texto": "outra da Bahia tambem"},
-    ]
-
-    result = demographics.summarize_region_distribution_with_coverage(
-        comments, ddd_to_uf=CUSTOM_DDD_TO_UF, region_keywords=CUSTOM_REGION_KEYWORDS
-    )
-
-    assert result["distribuicao"] == [{"uf": "BA", "pct": 2 / 3}, {"uf": "SP", "pct": 1 / 3}]
-    assert result["total_comentarios"] == 4
-    assert result["comentarios_com_regiao"] == 3
-    assert result["cobertura"] == 0.75
+def test_empty_list_returns_zeroed_contract_for_location():
+    result = demographics.estimate_location_by_ddd([])
+    assert result == {"top_estados": [], "amostra_n": 0, "amostra_com_ddd_n": 0, "coverage_pct": 0.0}

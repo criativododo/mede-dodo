@@ -1,753 +1,485 @@
-import json
-import os
-import sys
+"""Testes unitários da ISSUE-004 — núcleo Rodada 1 (ER Branding) e Rodadas 2/3
+(tipologia/P1, P2, P3, BQI, CI, densidade de patrocínio, parecer editorial),
+aprovadas pelo Dani em 2026-08-15 com base em BENCHMARK-METRICS-001.md §6-9.
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+`metrics.py` nunca classifica comentário bruto — recebe `comment_labels` já
+resolvido pela ISSUE-005 (`ai_local.py`/`ai_gemini.py`). P2 (retenção visual)
+depende de save_rate/share_rate/VTR/alcance_qualificado, que a coleta pública
+via Instaloader não expõe — por isso os testes de P2/BQI usam fixtures
+sintéticas com esses sinais já resolvidos; não há garantia de que a
+orquestração real (`src/app.py`) consiga alimentá-los hoje.
+"""
 
-from src import metrics
+import copy
+
+import pytest
+
+from src.features.analise import metrics
 
 
-def test_calc_pod_index_empty_list_returns_zeros():
-    result = metrics.calc_pod_index([])
+# --- weighted_interactions -----------------------------------------------------------
 
-    assert result == {
-        "total_comentarios": 0,
-        "comentaristas_unicos": 0,
-        "pod_index": 0.0,
-        "top_repetidores": {},
+
+def test_weighted_interactions_applies_approved_action_weights():
+    post = {"comments": 1, "shares": 1, "saves": 1, "likes": 1}
+    assert metrics.weighted_interactions(post) == 11  # 3+3+2+3
+
+
+def test_weighted_interactions_missing_fields_default_to_zero():
+    assert metrics.weighted_interactions({}) == 0
+
+
+# --- format_factor -----------------------------------------------------------
+
+
+def test_format_factor_carrossel_is_1_20():
+    assert metrics.format_factor("carrossel") == 1.20
+
+
+def test_format_factor_foto_is_1_00():
+    assert metrics.format_factor("foto") == 1.00
+
+
+def test_format_factor_reel_is_0_80():
+    assert metrics.format_factor("reel") == 0.80
+
+
+def test_format_factor_unknown_format_returns_none_never_implicit_weight():
+    assert metrics.format_factor("story_highlight") is None
+    assert metrics.format_factor(None) is None
+
+
+# --- resolve_denominator -----------------------------------------------------------
+
+
+def test_resolve_denominator_prefers_reach_unique_when_available():
+    post = {"reach_unique": 1000}
+    value, mode = metrics.resolve_denominator(post, followers_count=5000)
+    assert (value, mode) == (1000, "reach_unique")
+
+
+def test_resolve_denominator_falls_back_to_followers_when_reach_missing():
+    post = {"reach_unique": None}
+    value, mode = metrics.resolve_denominator(post, followers_count=5000)
+    assert (value, mode) == (5000, "followers")
+
+
+def test_resolve_denominator_unavailable_without_reach_or_followers():
+    post = {"reach_unique": None}
+    value, mode = metrics.resolve_denominator(post, followers_count=None)
+    assert (value, mode) == (None, "unavailable")
+
+
+def test_resolve_denominator_treats_zero_reach_as_absent_not_as_zero_division():
+    post = {"reach_unique": 0}
+    value, mode = metrics.resolve_denominator(post, followers_count=None)
+    assert (value, mode) == (None, "unavailable")
+
+
+def test_resolve_denominator_respects_reach_unique_only_preference():
+    post = {"reach_unique": None}
+    value, mode = metrics.resolve_denominator(post, followers_count=5000, allow_followers_fallback=False)
+    assert (value, mode) == (None, "unavailable")
+
+
+# --- calculate_er_branding -----------------------------------------------------------
+
+
+def test_calculate_er_branding_uses_reach_unique_when_all_posts_have_reach():
+    payload = {
+        "profile": {"followers_count": 10000},
+        "posts": [
+            {"post_id": "p1", "format": "foto", "reach_unique": 1000, "comments": 2, "shares": 1, "saves": 1, "likes": 10},
+            {"post_id": "p2", "format": "carrossel", "reach_unique": 2000, "comments": 0, "shares": 0, "saves": 5, "likes": 20},
+        ],
+    }
+    result = metrics.calculate_er_branding(payload)
+    assert result["denominator"] == "reach_unique"
+    assert result["value"] == 3.68  # 100 * (1.00*41 + 1.20*70) / (1.00*1000 + 1.20*2000)
+    assert result["posts_n"] == 2
+    assert result["content_scope"] == "all_content_without_stories"
+    assert result["format_weights"] == {"carrossel": 1.20, "foto": 1.00, "reel": 0.80}
+
+
+def test_calculate_er_branding_falls_back_to_followers_when_reach_missing():
+    payload = {
+        "profile": {"followers_count": 10000},
+        "posts": [
+            {"post_id": "p1", "format": "foto", "reach_unique": None, "comments": 1, "shares": 1, "saves": 1, "likes": 1},
+        ],
+    }
+    result = metrics.calculate_er_branding(payload)
+    assert result["denominator"] == "followers"
+    assert result["value"] == 0.11  # 100 * 11 / 10000
+    assert any("segu" in w for w in result["warnings"])
+
+
+def test_calculate_er_branding_mixed_denominator_keeps_both_posts_and_warns():
+    payload = {
+        "profile": {"followers_count": 5000},
+        "posts": [
+            {"post_id": "p1", "format": "foto", "reach_unique": 1000, "comments": 1, "shares": 1, "saves": 1, "likes": 1},
+            {"post_id": "p2", "format": "carrossel", "reach_unique": None, "comments": 1, "shares": 1, "saves": 1, "likes": 1},
+        ],
+    }
+    result = metrics.calculate_er_branding(payload)
+    assert result["denominator"] == "mixed"
+    assert result["posts_n"] == 2  # nenhum post desaparece na mistura
+    assert result["warnings"]
+
+
+def test_calculate_er_branding_unavailable_denominator_never_returns_numeric_value():
+    payload = {
+        "profile": {},
+        "posts": [
+            {"post_id": "p1", "format": "foto", "reach_unique": None, "comments": 1, "shares": 1, "saves": 1, "likes": 1},
+        ],
+    }
+    result = metrics.calculate_er_branding(payload)
+    assert result["value"] is None
+    assert result["denominator"] == "unavailable"
+    assert result["posts_excluded_no_denominator_n"] == 1
+    assert result["warnings"]
+
+
+def test_calculate_er_branding_zero_reach_never_produces_infinite_or_misleading_zero():
+    payload = {
+        "profile": {},
+        "posts": [
+            {"post_id": "p1", "format": "foto", "reach_unique": 0, "comments": 1, "shares": 1, "saves": 1, "likes": 1},
+        ],
+    }
+    result = metrics.calculate_er_branding(payload)
+    assert result["value"] is None
+    assert result["denominator"] == "unavailable"
+
+
+def test_calculate_er_branding_excludes_unknown_format_with_explicit_warning():
+    payload = {
+        "profile": {"followers_count": 10000},
+        "posts": [
+            {"post_id": "p1", "format": "foto", "reach_unique": 1000, "comments": 0, "shares": 0, "saves": 0, "likes": 100},
+            {"post_id": "p2", "format": "highlight", "reach_unique": 500, "comments": 0, "shares": 0, "saves": 0, "likes": 999},
+        ],
+    }
+    result = metrics.calculate_er_branding(payload)
+    assert result["value"] == 30.0  # só p1 (1.00*300 / 1.00*1000); p2 nunca recebe peso implícito
+    assert result["posts_n"] == 1
+    assert result["posts_excluded_unknown_format_n"] == 1
+    assert any("p2" in w for w in result["warnings"])
+
+
+# --- calculate_er_by_format -----------------------------------------------------------
+
+
+def test_calculate_er_by_format_returns_per_format_cuts():
+    payload = {
+        "profile": {},
+        "posts": [
+            {"post_id": "p1", "format": "foto", "reach_unique": 1000, "comments": 0, "shares": 0, "saves": 0, "likes": 100},
+            {"post_id": "p2", "format": "foto", "reach_unique": 2000, "comments": 0, "shares": 0, "saves": 0, "likes": 200},
+            {"post_id": "p3", "format": "carrossel", "reach_unique": 500, "comments": 0, "shares": 0, "saves": 0, "likes": 50},
+        ],
+    }
+    result = metrics.calculate_er_by_format(payload)
+    assert result["foto"] == {"value": 30.0, "posts_n": 2}
+    assert result["carrossel"] == {"value": 30.0, "posts_n": 1}
+    assert result["reel"] == {"value": None, "posts_n": 0}
+
+
+# --- calculate_stories_context -----------------------------------------------------------
+
+
+def test_calculate_stories_context_reports_count_as_separate_signal():
+    payload = {"stories": [{"story_id": "s1"}, {"story_id": "s2"}, {"story_id": "s3"}]}
+    assert metrics.calculate_stories_context(payload) == {
+        "status": "separate_contextual_signal",
+        "stories_n": 3,
     }
 
 
-def test_calc_pod_index_posts_without_commenters_never_raises():
-    posts = [{"post_id": "p1"}, {"post_id": "p2", "commenters": []}]
-
-    result = metrics.calc_pod_index(posts)
-
-    assert result == {
-        "total_comentarios": 0,
-        "comentaristas_unicos": 0,
-        "pod_index": 0.0,
-        "top_repetidores": {},
+def test_stories_never_change_er_branding_value():
+    base_payload = {
+        "profile": {},
+        "posts": [{"post_id": "p1", "format": "foto", "reach_unique": 1000, "comments": 0, "shares": 0, "saves": 0, "likes": 100}],
     }
+    with_stories = copy.deepcopy(base_payload)
+    with_stories["stories"] = [{"story_id": "s1"}, {"story_id": "s2"}]
+
+    value_without_stories = metrics.calculate_er_branding(base_payload)["value"]
+    value_with_stories = metrics.calculate_er_branding(with_stories)["value"]
+
+    assert value_without_stories == value_with_stories == 30.0
 
 
-def test_calc_pod_index_no_repeat_commenters_returns_zero_pod_index():
-    posts = [
-        {"post_id": "p1", "commenters": ["ana", "bruna"]},
-        {"post_id": "p2", "commenters": ["carla"]},
-    ]
-
-    result = metrics.calc_pod_index(posts)
-
-    assert result["total_comentarios"] == 3
-    assert result["comentaristas_unicos"] == 3
-    assert result["pod_index"] == 0.0
-    assert result["top_repetidores"] == {}
+# --- calculate_metrics (orquestrador) -----------------------------------------------------------
 
 
-def test_calc_pod_index_detects_repeated_commenter_across_posts():
-    posts = [
-        {"post_id": "p1", "commenters": ["ana", "bruna", "carla"]},
-        {"post_id": "p2", "commenters": ["ana", "diana"]},
-        {"post_id": "p3", "commenters": ["ana", "bruna"]},
-    ]
-
-    result = metrics.calc_pod_index(posts)
-
-    assert result["total_comentarios"] == 7
-    assert result["comentaristas_unicos"] == 4
-    assert result["pod_index"] == (3 + 2) / 7
-    assert result["top_repetidores"] == {"ana": 3, "bruna": 2}
-
-
-def test_calc_pod_index_top_repetidores_sorted_desc_and_excludes_single_appearance():
-    posts = [
-        {"post_id": "p1", "commenters": ["ana", "bruna"]},
-        {"post_id": "p2", "commenters": ["ana", "bruna", "carla"]},
-        {"post_id": "p3", "commenters": ["ana"]},
-        {"post_id": "p4", "commenters": ["diana"]},
-    ]
-
-    result = metrics.calc_pod_index(posts)
-
-    assert list(result["top_repetidores"].items()) == [("ana", 3), ("bruna", 2)]
-    assert "carla" not in result["top_repetidores"]
-
-
-def test_calc_pod_index_same_commenter_appearing_only_once_is_not_a_repetidor():
-    posts = [{"post_id": "p1", "commenters": ["ana", "ana"]}]
-
-    result = metrics.calc_pod_index(posts)
-
-    assert result["total_comentarios"] == 2
-    assert result["comentaristas_unicos"] == 1
-    assert result["pod_index"] == 0.0
-    assert result["top_repetidores"] == {}
-
-
-def test_calc_average_engagement_empty_posts_returns_zeros():
-    result = metrics.calc_average_engagement([])
-
-    assert result == {
-        "average_likes": 0.0,
-        "average_comments": 0.0,
-        "total_likes": 0,
-        "total_comments": 0,
-        "post_count": 0,
+def test_calculate_metrics_top_level_contract_and_pending_stubs():
+    payload = {
+        "profile": {"followers_count": 10000},
+        "window": {"days": 90},
+        "posts": [
+            {"post_id": "p1", "format": "foto", "reach_unique": 1000, "comments": 2, "shares": 1, "saves": 1, "likes": 10},
+        ],
+        "stories": [],
     }
+    result = metrics.calculate_metrics(payload)
+
+    assert set(result.keys()) == {
+        "status", "method_version", "er_branding", "er_by_format", "stories_context",
+        "denominator_mode", "coverage", "provenance", "warnings",
+        "comment_typology", "bqi", "ci", "sponsor_density", "editorial_opinion",
+    }
+    assert result["status"] == "ok"
+    assert result["method_version"] == metrics.METHOD_VERSION
+    assert result["denominator_mode"] == "reach_unique"
+    # Sem comment_labels/p2_inputs/weekly_consistency no payload, Rodadas 2/3
+    # retornam indisponivel explícito — nunca o stub literal antigo.
+    assert result["comment_typology"]["status"] == "indisponivel"
+    assert result["bqi"]["status"] == "indisponivel"
+    assert result["ci"]["status"] == "indisponivel"
+    assert result["sponsor_density"]["status"] == "ok"  # SD só depende de posts+is_sponsored, já presentes
+    assert result["editorial_opinion"]["status"] == "indisponivel"
 
 
-def test_calc_average_engagement_computes_mean_per_post():
-    posts = [
-        {"likes_count": 100, "comments_count": 10},
-        {"likes_count": 200, "comments_count": 20},
-    ]
-
-    result = metrics.calc_average_engagement(posts)
-
-    assert result["average_likes"] == 150.0
-    assert result["average_comments"] == 15.0
-    assert result["total_likes"] == 300
-    assert result["total_comments"] == 30
-    assert result["post_count"] == 2
+def test_calculate_metrics_no_posts_returns_insufficient_data():
+    result = metrics.calculate_metrics({"profile": {}, "posts": []})
+    assert result["status"] == "insufficient_data"
+    assert result["er_branding"]["value"] is None
 
 
-def test_calc_average_engagement_treats_missing_counts_as_zero_without_raising():
-    posts = [{"likes_count": None, "comments_count": None}, {"likes_count": 50, "comments_count": 5}]
-
-    result = metrics.calc_average_engagement(posts)
-
-    assert result["average_likes"] == 25.0
-    assert result["average_comments"] == 2.5
-
-
-def test_estimate_fake_followers_risk_healthy_profile_scores_low():
-    # Engajamento igual ao benchmark do próprio porte (nano, 8%) e nenhum pod.
-    result = metrics.estimate_fake_followers_risk(engagement_rate=0.08, followers_count=5000, pod_index=0.0)
-
-    assert result["value"] == 0.0
-    assert result["kind"] == "estimated"
-    assert result["confidence"] == "baixa"
+def test_calculate_metrics_is_deterministic_for_the_same_payload():
+    payload = {
+        "profile": {"followers_count": 10000},
+        "posts": [
+            {"post_id": "p1", "format": "reel", "reach_unique": 1500, "comments": 3, "shares": 2, "saves": 4, "likes": 40},
+        ],
+    }
+    first = metrics.calculate_metrics(copy.deepcopy(payload))
+    second = metrics.calculate_metrics(copy.deepcopy(payload))
+    assert first == second
 
 
-def test_estimate_fake_followers_risk_low_engagement_and_high_pod_scores_high():
-    # Engajamento muito abaixo do benchmark do porte + metade dos comentários vindos de pod.
-    result = metrics.estimate_fake_followers_risk(engagement_rate=0.0, followers_count=5000, pod_index=0.5)
+def test_calculate_metrics_coverage_reports_reach_unique_ratio():
+    payload = {
+        "profile": {"followers_count": 5000},
+        "posts": [
+            {"post_id": "p1", "format": "foto", "reach_unique": 1000, "comments": 0, "shares": 0, "saves": 0, "likes": 1},
+            {"post_id": "p2", "format": "foto", "reach_unique": None, "comments": 0, "shares": 0, "saves": 0, "likes": 1},
+        ],
+    }
+    coverage = metrics.calculate_metrics(payload)["coverage"]
+    assert coverage["posts_total_n"] == 2
+    assert coverage["posts_with_reach_unique_n"] == 1
+    assert coverage["reach_unique_coverage_pct"] == 50.0
+    assert coverage["posts_used_in_er_n"] == 2  # p2 sobrevive via fallback de seguidores
 
-    assert result["value"] == 80.0
+
+# --- calculate_comment_typology (Rodada 2 — V_AB e Pilar 1) -----------------------------------------------------------
+
+def test_calculate_comment_typology_computes_v_ab_and_p1():
+    result = metrics.calculate_comment_typology({"A": 10, "B": 20, "C": 5, "D": 15})
+    assert result["status"] == "ok"
+    assert result["v_ab"] == 60.0
+    assert result["p1"] == pytest.approx(54.33, abs=0.01)
+    assert result["counts"] == {"A": 10, "B": 20, "C": 5, "D": 15}
 
 
-def test_estimate_fake_followers_risk_without_followers_count_uses_only_pod_index():
-    result = metrics.estimate_fake_followers_risk(engagement_rate=0.0, followers_count=0, pod_index=0.25)
+def test_calculate_comment_typology_empty_labels_is_indisponivel():
+    result = metrics.calculate_comment_typology({})
+    assert result["status"] == "indisponivel"
+    assert result["v_ab"] is None
+    assert result["p1"] is None
 
-    assert result["value"] == 10.0
+
+def test_calculate_comment_typology_zero_a_and_b_never_divides_by_zero():
+    result = metrics.calculate_comment_typology({"A": 0, "B": 0, "C": 10, "D": 5})
+    assert result["status"] == "ok"
+    assert result["v_ab"] == 0.0
+    assert result["p1"] == 0.0
 
 
-def test_estimate_fake_followers_risk_never_exceeds_100():
-    result = metrics.estimate_fake_followers_risk(engagement_rate=0.0, followers_count=5000, pod_index=1.0)
+# --- calculate_noise_reduction (Rodada 2 — Pilar 3) -----------------------------------------------------------
 
+def test_calculate_noise_reduction_computes_p3():
+    result = metrics.calculate_noise_reduction({"A": 10, "B": 20, "C": 5, "D": 15, "spam": 3})
+    assert result["status"] == "ok"
+    assert result["value"] == pytest.approx(77.2, abs=0.01)
+
+
+def test_calculate_noise_reduction_empty_is_indisponivel():
+    result = metrics.calculate_noise_reduction({})
+    assert result["status"] == "indisponivel"
+    assert result["value"] is None
+
+
+# --- calculate_visual_retention (Rodada 2 — Pilar 2, requer sinais indisponíveis via scraping público) -----------------------------------------------------------
+
+def test_calculate_visual_retention_computes_p2_when_all_rates_present():
+    result = metrics.calculate_visual_retention(
+        {"save_rate": 0.02, "share_rate": 0.01, "vtr": 0.25, "qualified_reach_rate": 0.70}
+    )
+    assert result["status"] == "ok"
+    assert 0 <= result["value"] <= 100
+
+
+def test_calculate_visual_retention_missing_any_rate_is_indisponivel():
+    result = metrics.calculate_visual_retention({"save_rate": 0.02})
+    assert result["status"] == "indisponivel"
+    assert result["value"] is None
+
+
+def test_calculate_visual_retention_out_of_band_rate_clips_to_0_or_100():
+    result = metrics.calculate_visual_retention(
+        {"save_rate": 10.0, "share_rate": 10.0, "vtr": 10.0, "qualified_reach_rate": 10.0}
+    )
     assert result["value"] == 100.0
 
 
-# --- Decomposição de sinais de autenticidade da audiência (Sprint 002 Fase 3,
-# BENCHMARK-001.md §4.3/§7.2) ---
+# --- calculate_bqi (Rodada 2 — combinação dos pilares) -----------------------------------------------------------
 
-
-def test_classify_pod_risk_below_10_percent_is_baixo():
-    assert metrics.classify_pod_risk(0.0) == "baixo"
-    assert metrics.classify_pod_risk(9.9) == "baixo"
-
-
-def test_classify_pod_risk_between_10_and_25_percent_is_medio():
-    assert metrics.classify_pod_risk(10.0) == "medio"
-    assert metrics.classify_pod_risk(25.0) == "medio"
-
-
-def test_classify_pod_risk_above_25_percent_is_alto():
-    assert metrics.classify_pod_risk(25.1) == "alto"
-    assert metrics.classify_pod_risk(100.0) == "alto"
-
-
-def test_calc_pod_index_metric_no_comments_returns_unavailable():
-    posts = [{"post_id": "p1", "raw": {}}]
-
-    result = metrics.calc_pod_index_metric(posts)
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-    assert result["kind"] is None
-    assert result["top_repetidores"] == {}
-    assert result["risk"] is None
-    assert result["ressalvas"] != []
-
-
-def test_calc_pod_index_metric_computes_percent_value_and_risk():
-    posts = [
-        {"post_id": "p1", "raw": {"comments": [{"username": "ana"}, {"username": "bruna"}]}},
-        {"post_id": "p2", "raw": {"comments": [{"username": "ana"}]}},
-    ]
-
-    result = metrics.calc_pod_index_metric(posts)
-
-    assert result["value"] == (2 / 3) * 100
-    assert result["unit"] == "percent"
-    assert result["kind"] == "derived"
+def test_calculate_bqi_combines_pillars_and_bands():
+    result = metrics.calculate_bqi(p1=80, p2=60, p3=90)
     assert result["status"] == "ok"
-    assert result["top_repetidores"] == {"ana": 2}
-    assert result["risk"] == "alto"
+    assert result["value"] == pytest.approx(69.5, abs=0.1)
+    assert result["band"] == "saudavel"
 
 
-def test_calc_shallow_ratio_metric_no_comments_returns_unavailable():
-    posts = [{"post_id": "p1", "raw": {}}]
-
-    result = metrics.calc_shallow_ratio_metric(posts)
-
-    assert result["value"] is None
+def test_calculate_bqi_missing_p1_or_p2_is_indisponivel_never_zero():
+    result = metrics.calculate_bqi(p1=None, p2=60, p3=90)
     assert result["status"] == "indisponivel"
-    assert result["shallow_count"] == 0
-    assert result["total_count"] == 0
+    assert result["value"] is None
 
 
-def test_calc_shallow_ratio_metric_computes_percent_of_shallow_comments():
+def test_calculate_bqi_missing_p3_defaults_to_no_penalty_but_warns():
+    with_p3 = metrics.calculate_bqi(p1=80, p2=60, p3=100)
+    without_p3 = metrics.calculate_bqi(p1=80, p2=60, p3=None)
+    assert without_p3["status"] == "ok"
+    assert without_p3["value"] == with_p3["value"]
+    assert without_p3.get("warning")
+
+
+def test_calculate_bqi_bands_match_benchmark_table():
+    assert metrics.calculate_bqi(p1=100, p2=100, p3=100)["band"] == "excelente"
+    assert metrics.calculate_bqi(p1=10, p2=10, p3=0)["band"] == "nao_recomendada"
+
+
+# --- calculate_sponsor_density (Rodada 3 — SD, real hoje via is_sponsored) -----------------------------------------------------------
+
+def test_calculate_sponsor_density_computes_ratio_over_comparable_posts():
     posts = [
-        {
-            "post_id": "p1",
-            "raw": {
-                "comments": [
-                    {"texto": "linda"},
-                    {"texto": "Qual o preço desse vestido?"},
-                    {"texto": "gata"},
-                    {"texto": "Tem no tamanho M?"},
-                ]
-            },
-        },
+        {"format": "foto", "is_sponsored": True},
+        {"format": "foto", "is_sponsored": False},
+        {"format": "reel", "is_sponsored": True},
+        {"format": "highlight", "is_sponsored": True},  # formato desconhecido: nunca conta como comparável
     ]
-
-    result = metrics.calc_shallow_ratio_metric(posts)
-
-    assert result["value"] == 50.0
-    assert result["unit"] == "percent"
-    assert result["kind"] == "derived"
+    result = metrics.calculate_sponsor_density(posts)
     assert result["status"] == "ok"
-    assert result["shallow_count"] == 2
-    assert result["total_count"] == 4
+    assert result["unidades_comparaveis_n"] == 3
+    assert result["unidades_patrocinadas_n"] == 2
+    assert result["value"] == pytest.approx(66.7, abs=0.1)
+    assert result["band"] == "nao_recomendado"
 
 
-def test_calc_creator_response_rate_metric_no_comments_returns_unavailable():
-    posts = [{"post_id": "p1", "raw": {}}]
-
-    result = metrics.calc_creator_response_rate_metric(posts)
-
-    assert result["value"] is None
+def test_calculate_sponsor_density_no_comparable_posts_is_indisponivel():
+    result = metrics.calculate_sponsor_density([])
     assert result["status"] == "indisponivel"
-    assert result["responded_count"] == 0
-    assert result["total_count"] == 0
+    assert result["value"] is None
 
 
-def test_calc_creator_response_rate_metric_computes_percent_of_responded_comments():
-    posts = [
-        {
-            "post_id": "p1",
-            "raw": {
-                "comments": [
-                    {"texto": "oi", "respondido": True},
-                    {"texto": "oi de novo", "respondido": False},
-                    {"texto": "ola", "respondido": True},
-                    {"texto": "e ai", "respondido": False},
-                ]
-            },
-        },
-    ]
+# --- calculate_consistency (Rodada 3 — CI) -----------------------------------------------------------
 
-    result = metrics.calc_creator_response_rate_metric(posts)
-
-    assert result["value"] == 50.0
+def test_calculate_consistency_low_dispersion_and_high_floor_coverage_is_consistente():
+    result = metrics.calculate_consistency(weekly_values=[5.0, 5.2, 4.8, 5.1, 5.0], floor=3.0)
     assert result["status"] == "ok"
-    assert result["responded_count"] == 2
-    assert result["total_count"] == 4
+    assert result["value"] >= 75
+    assert result["band"] == "consistente"
 
 
-def test_calc_audience_authenticity_signal_unavailable_when_pod_index_metric_is_unavailable():
-    unavailable_pod_index = metrics.calc_pod_index_metric([{"post_id": "p1", "raw": {}}])
-    unavailable_engagement = metrics.calc_engagement_rate_by_followers([], followers_count=0)
+def test_calculate_consistency_high_dispersion_and_low_floor_coverage_is_instavel():
+    result = metrics.calculate_consistency(weekly_values=[1.0, 0.5, 20.0, 0.8, 0.3], floor=10.0)
+    assert result["status"] == "ok"
+    assert result["value"] < 60
+    assert result["band"] == "instavel"
 
-    result = metrics.calc_audience_authenticity_signal(unavailable_engagement, 0, unavailable_pod_index)
 
-    assert result["value"] is None
+def test_calculate_consistency_without_floor_is_indisponivel():
+    result = metrics.calculate_consistency(weekly_values=[5.0, 5.1, 5.2], floor=None)
     assert result["status"] == "indisponivel"
-    assert result["kind"] is None
-    assert result["is_estimated"] is True
-    assert result["ressalvas"] != []
+    assert result["value"] is None
 
 
-def test_calc_audience_authenticity_signal_is_estimated_with_explicit_caveat():
-    posts = [
-        {"post_id": "p1", "raw": {"comments": [{"username": "ana"}, {"username": "bruna"}]}},
-        {"post_id": "p2", "raw": {"comments": [{"username": "ana"}]}},
-    ]
-    pod_index_metric = metrics.calc_pod_index_metric(posts)
-    engagement_metric = metrics.calc_engagement_rate_by_followers(
-        [{"likes_count": 1, "comments_count": 0}], followers_count=5000
+def test_calculate_consistency_needs_at_least_two_weeks():
+    result = metrics.calculate_consistency(weekly_values=[5.0], floor=3.0)
+    assert result["status"] == "indisponivel"
+
+
+# --- calculate_editorial_opinion (Rodada 3 — parecer combinado) -----------------------------------------------------------
+
+def test_calculate_editorial_opinion_high_affinity():
+    result = metrics.calculate_editorial_opinion(bqi=85, v_ab=45, ci=80, sd=15, d_pct=20)
+    assert result["veredito"] == "recomendada_alta_afinidade"
+
+
+def test_calculate_editorial_opinion_recommended_with_caveats():
+    result = metrics.calculate_editorial_opinion(bqi=70, v_ab=35, ci=65, sd=22, d_pct=40)
+    assert result["veredito"] == "recomendada_com_ressalvas"
+
+
+def test_calculate_editorial_opinion_not_recommended_for_branding():
+    result = metrics.calculate_editorial_opinion(bqi=55, v_ab=25, ci=55, sd=30, d_pct=40)
+    assert result["veredito"] == "nao_recomendada_branding"
+
+
+def test_calculate_editorial_opinion_viral_dependency_forces_not_recommended_for_branding():
+    result = metrics.calculate_editorial_opinion(bqi=90, v_ab=45, ci=80, sd=10, d_pct=10, viral_dependency=True)
+    assert result["veredito"] == "nao_recomendada_branding"
+
+
+def test_calculate_editorial_opinion_blocker_always_wins_regardless_of_bqi():
+    result = metrics.calculate_editorial_opinion(
+        bqi=95, v_ab=50, ci=90, sd=5, d_pct=5, blockers={"fraude_provavel": True}
     )
-
-    result = metrics.calc_audience_authenticity_signal(engagement_metric, 5000, pod_index_metric)
-
-    assert result["value"] is not None
-    assert 0.0 <= result["value"] <= 100.0
-    assert result["kind"] == "estimated"
-    assert result["is_estimated"] is True
-    assert result["confidence"] == "baixa"
-    assert result["ressalvas"] != []
+    assert result["veredito"] == "nao_recomendada"
 
 
-# --- Contrato canônico de métricas e proveniência (Sprint 002, BENCHMARK-001.md §6/§7,
-# ISSUE-001.md §5.3/§5.4/§6.2) ---
-
-
-def test_calc_engagement_rate_by_followers_computes_mean_of_per_post_ratio_as_percent():
-    posts = [
-        {"likes_count": 100, "comments_count": 10},
-        {"likes_count": 50, "comments_count": 5},
-    ]
-
-    result = metrics.calc_engagement_rate_by_followers(posts, followers_count=1000)
-
-    assert result["value"] == 8.25
-    assert result["unit"] == "percent"
-    assert result["kind"] == "derived"
-    assert result["source"] == "local_scraper_sample"
-    assert result["confidence"] == "high"
-    assert result["denominator"] == "followers_count"
-    assert result["included_actions"] == ["likes", "comments"]
-    assert result["post_count"] == 2
-    assert result["status"] == "ok"
-    assert result["ressalvas"] == []
-
-
-def test_calc_engagement_rate_by_followers_empty_posts_returns_none_not_zero():
-    result = metrics.calc_engagement_rate_by_followers([], followers_count=1000)
-
-    assert result["value"] is None
+def test_calculate_editorial_opinion_missing_core_metric_is_indisponivel_never_fabricated():
+    result = metrics.calculate_editorial_opinion(bqi=None, v_ab=45, ci=80, sd=15, d_pct=20)
     assert result["status"] == "indisponivel"
-    assert result["kind"] is None
-    assert result["confidence"] is None
-    assert result["post_count"] == 0
-    assert result["ressalvas"] != []
-
-
-def test_calc_engagement_rate_by_followers_zero_followers_returns_none_without_raising():
-    posts = [{"likes_count": 100, "comments_count": 10}]
-
-    result = metrics.calc_engagement_rate_by_followers(posts, followers_count=0)
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-
-
-def test_calc_engagement_rate_by_followers_missing_counts_treated_as_zero_without_raising():
-    posts = [{"likes_count": None, "comments_count": None}]
-
-    result = metrics.calc_engagement_rate_by_followers(posts, followers_count=1000)
-
-    assert result["value"] == 0.0
-    assert result["status"] == "ok"
-
-
-def test_calc_engagement_rate_by_reach_computes_total_interactions_over_total_reach():
-    posts = [
-        {"likes_count": 100, "comments_count": 10, "estimated_reach": 2000},
-        {"likes_count": 50, "comments_count": 5, "estimated_reach": 1000},
-    ]
-
-    result = metrics.calc_engagement_rate_by_reach(posts)
-
-    assert result["value"] == 5.5
-    assert result["unit"] == "percent"
-    assert result["kind"] == "derived"
-    assert result["source"] == "post_level_estimated_reach"
-    assert result["denominator"] == "estimated_reach"
-    assert result["included_actions"] == ["likes", "comments"]
-    assert result["post_count"] == 2
-    assert result["status"] == "ok"
-
-
-def test_calc_engagement_rate_by_reach_returns_none_when_no_post_has_reach_data():
-    posts = [{"likes_count": 100, "comments_count": 10}]
-
-    result = metrics.calc_engagement_rate_by_reach(posts)
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-    assert result["ressalvas"] != []
-
-
-def test_calc_engagement_rate_by_reach_empty_posts_never_raises():
-    result = metrics.calc_engagement_rate_by_reach([])
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-
-
-def test_calc_engagement_rate_by_reach_ignores_posts_without_reach_but_uses_the_ones_with_it():
-    posts = [
-        {"likes_count": 100, "comments_count": 10, "estimated_reach": 2000},
-        {"likes_count": 999, "comments_count": 999},
-    ]
-
-    result = metrics.calc_engagement_rate_by_reach(posts)
-
-    assert result["value"] == 5.5
-    assert result["post_count"] == 1
-
-
-def test_calc_engagement_rate_by_views_computes_total_interactions_over_total_views_for_reels():
-    posts = [
-        {"likes_count": 100, "comments_count": 10, "raw": {"is_video": True, "video_view_count": 5000}},
-        {"likes_count": 50, "comments_count": 5, "raw": {"is_video": True, "video_view_count": 2000}},
-        {"likes_count": 30, "comments_count": 3, "raw": {"is_video": False, "video_view_count": None}},
-    ]
-
-    result = metrics.calc_engagement_rate_by_views(posts)
-
-    assert result["value"] == (165 / 7000) * 100
-    assert result["kind"] == "derived"
-    assert result["source"] == "post_level_video_view_count"
-    assert result["denominator"] == "video_view_count"
-    assert result["post_count"] == 2
-    assert result["status"] == "ok"
-
-
-def test_calc_engagement_rate_by_views_returns_none_when_no_video_in_sample():
-    posts = [{"likes_count": 100, "comments_count": 10, "raw": {"is_video": False}}]
-
-    result = metrics.calc_engagement_rate_by_views(posts)
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-
-
-def test_calc_engagement_rate_by_views_returns_none_when_video_has_no_view_count():
-    posts = [{"likes_count": 100, "comments_count": 10, "raw": {"is_video": True, "video_view_count": None}}]
-
-    result = metrics.calc_engagement_rate_by_views(posts)
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-
-
-def test_calc_engagement_rate_by_views_returns_none_when_post_has_no_raw_dict():
-    posts = [{"likes_count": 100, "comments_count": 10}]
-
-    result = metrics.calc_engagement_rate_by_views(posts)
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-
-
-def test_calc_engagement_rate_by_views_empty_posts_never_raises():
-    result = metrics.calc_engagement_rate_by_views([])
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-
-
-_ENGAGEMENT_RATE_FIELDS = {
-    "engagement_rate_by_followers",
-    "engagement_rate_by_reach",
-    "engagement_rate_by_views",
-}
-_AUDIENCE_QUALITY_FIELDS = {
-    "pod_index",
-    "shallow_ratio",
-    "creator_response_rate",
-    "audience_authenticity_signal",
-}
-_CONTENT_AFFINITY_FIELDS = {"top_posts", "popular_tags", "brand_mentions"}
-_DEMOGRAPHIC_FIELDS = {"gender_distribution", "region_distribution"}
-_METRIC_BASELINE_KEYS = {"value", "unit", "kind", "source", "confidence", "status", "ressalvas"}
-
-
-def test_build_audit_report_has_canonical_metrics_and_provenance_shape():
-    posts = [{"likes_count": 100, "comments_count": 10}]
-
-    report = metrics.build_audit_report(posts, followers_count=1000)
-
-    assert set(report.keys()) == {"metrics", "provenance"}
-    assert (
-        set(report["metrics"].keys())
-        == _ENGAGEMENT_RATE_FIELDS | _AUDIENCE_QUALITY_FIELDS | _CONTENT_AFFINITY_FIELDS | _DEMOGRAPHIC_FIELDS
-    )
-
-    for field in _ENGAGEMENT_RATE_FIELDS:
-        metric = report["metrics"][field]
-        assert set(metric.keys()) == _METRIC_BASELINE_KEYS | {
-            "denominator",
-            "included_actions",
-            "post_count",
-        }
-
-    for field in _AUDIENCE_QUALITY_FIELDS | _CONTENT_AFFINITY_FIELDS | _DEMOGRAPHIC_FIELDS:
-        metric = report["metrics"][field]
-        assert _METRIC_BASELINE_KEYS <= set(metric.keys())
-
-    assert len(report["provenance"]) == 12
-    for entry in report["provenance"]:
-        assert set(entry.keys()) == {"field", "kind", "source", "confidence", "status"}
-        assert entry["field"] in report["metrics"]
-        assert entry["kind"] == report["metrics"][entry["field"]]["kind"]
-        assert entry["source"] == report["metrics"][entry["field"]]["source"]
-
-
-def test_build_audit_report_is_json_serializable():
-    posts = [{"likes_count": 100, "comments_count": 10}]
-
-    report = metrics.build_audit_report(posts, followers_count=1000)
-
-    json.dumps(report)  # não deve lançar exceção
-
-
-def test_build_audit_report_never_raises_on_empty_sample():
-    report = metrics.build_audit_report([], followers_count=0)
-
-    for metric in report["metrics"].values():
-        assert metric["value"] is None
-        assert metric["status"] == "indisponivel"
-
-
-def test_build_audit_report_computes_reach_and_views_when_data_is_present():
-    posts = [
-        {
-            "likes_count": 100,
-            "comments_count": 10,
-            "estimated_reach": 2000,
-            "raw": {"is_video": True, "video_view_count": 5000},
-        },
-    ]
-
-    report = metrics.build_audit_report(posts, followers_count=1000)
-
-    assert report["metrics"]["engagement_rate_by_followers"]["status"] == "ok"
-    assert report["metrics"]["engagement_rate_by_reach"]["status"] == "ok"
-    assert report["metrics"]["engagement_rate_by_views"]["status"] == "ok"
-
-
-# --- Sprint 002 Fase 4: extract_top_posts -----------------------------------
-
-
-def test_extract_top_posts_empty_posts_returns_indisponivel():
-    result = metrics.extract_top_posts([])
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-    assert result["posts"] == []
-
-
-def test_extract_top_posts_ranks_by_absolute_engagement_descending():
-    posts = [
-        {
-            "post_id": "p1",
-            "likes_count": 10,
-            "comments_count": 1,
-            "raw": {"shortcode": "aaa", "published_at": "2026-08-01T00:00:00+00:00", "media_type": "IMAGE"},
-        },
-        {
-            "post_id": "p2",
-            "likes_count": 500,
-            "comments_count": 50,
-            "raw": {"shortcode": "bbb", "published_at": "2026-08-02T00:00:00+00:00", "media_type": "REEL"},
-        },
-        {
-            "post_id": "p3",
-            "likes_count": 100,
-            "comments_count": 10,
-            "raw": {"shortcode": "ccc", "published_at": "2026-08-03T00:00:00+00:00", "media_type": "CAROUSEL"},
-        },
-    ]
-
-    result = metrics.extract_top_posts(posts, limit=2, followers_count=1000)
-
-    assert result["status"] == "ok"
-    assert result["value"] == 2
-    assert [item["post_id"] for item in result["posts"]] == ["p2", "p3"]
-    assert result["posts"][0]["shortcode"] == "bbb"
-    assert result["posts"][0]["link"] == "https://www.instagram.com/p/bbb/"
-    assert result["posts"][0]["media_type"] == "REEL"
-    assert result["posts"][0]["engagement_absolute"] == 550
-    assert round(result["posts"][0]["engagement_rate"], 4) == 55.0
-
-
-def test_extract_top_posts_engagement_rate_is_none_without_followers_count():
-    posts = [{"post_id": "p1", "likes_count": 10, "comments_count": 1, "raw": {"shortcode": "aaa"}}]
-
-    result = metrics.extract_top_posts(posts)
-
-    assert result["posts"][0]["engagement_rate"] is None
-
-
-def test_extract_top_posts_never_raises_on_missing_raw_or_counts():
-    posts = [{"post_id": "p1"}]
-
-    result = metrics.extract_top_posts(posts)
-
-    assert result["status"] == "ok"
-    assert result["posts"][0]["shortcode"] is None
-    assert result["posts"][0]["link"] is None
-    assert result["posts"][0]["likes_count"] == 0
-    assert result["posts"][0]["comments_count"] == 0
-
-
-# --- Sprint 002 Fase 4: extract_popular_tags --------------------------------
-
-
-def test_extract_popular_tags_no_captions_returns_indisponivel():
-    posts = [{"raw": {"caption": "sem hashtag aqui"}}, {"post_id": "p2"}]
-
-    result = metrics.extract_popular_tags(posts)
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-    assert result["tags"] == []
-
-
-def test_extract_popular_tags_counts_frequency_case_insensitive_and_sorted_desc():
-    posts = [
-        {"raw": {"caption": "amei o look #moda #Verao2026"}},
-        {"raw": {"caption": "#MODA demais, quero #verao2026 inteiro"}},
-        {"raw": {"caption": "#moda sempre"}},
-    ]
-
-    result = metrics.extract_popular_tags(posts, limit=10)
-
-    assert result["status"] == "ok"
-    assert result["tags"][0] == {"tag": "#moda", "count": 3}
-    assert result["tags"][1] == {"tag": "#verao2026", "count": 2}
-    assert result["value"] == 2
-
-
-def test_extract_popular_tags_respects_limit():
-    posts = [{"raw": {"caption": "#a #b #c"}}]
-
-    result = metrics.extract_popular_tags(posts, limit=2)
-
-    assert len(result["tags"]) == 2
-
-
-# --- Sprint 002 Fase 4: extract_brand_mentions ------------------------------
-
-
-def test_extract_brand_mentions_no_mentions_returns_indisponivel():
-    posts = [{"raw": {"caption": "sem nenhuma marca aqui"}}]
-
-    result = metrics.extract_brand_mentions(posts)
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-    assert result["mentions"] == []
-
-
-def test_extract_brand_mentions_separates_organic_from_confirmed_publi():
-    posts = [
-        {"raw": {"caption": "look de hoje com @marca_organica, amei"}},
-        {"raw": {"caption": "publi paga: use o código com @marca_publi #publi"}},
-    ]
-
-    result = metrics.extract_brand_mentions(posts)
-
-    by_handle = {item["handle"]: item for item in result["mentions"]}
-    assert by_handle["@marca_organica"]["tipo"] == "mencao_organica"
-    assert by_handle["@marca_organica"]["confirmadas"] == 0
-    assert by_handle["@marca_organica"]["organicas"] == 1
-    assert by_handle["@marca_publi"]["tipo"] == "publi_confirmada"
-    assert by_handle["@marca_publi"]["confirmadas"] == 1
-    assert "Menção não é prova suficiente" in result["ressalvas"][0]
-
-
-def test_extract_brand_mentions_counts_repeated_mentions_across_posts():
-    posts = [
-        {"raw": {"caption": "com @marca_x"}},
-        {"raw": {"caption": "de novo @marca_x por aqui"}},
-    ]
-
-    result = metrics.extract_brand_mentions(posts)
-
-    assert result["mentions"][0]["handle"] == "@marca_x"
-    assert result["mentions"][0]["count"] == 2
-
-
-# --- Sprint 002 Fase 4: gender_distribution / region_distribution metrics --
-
-
-_FASE4_NAMES_DB = {
-    "maria": {"F": 950, "M": 5},
-    "joao": {"F": 2, "M": 900},
-}
-_FASE4_DDD_TO_UF = {"11": "SP"}
-_FASE4_REGION_KEYWORDS = {"sao paulo": "SP"}
-
-
-def _post_with_comments(comments):
-    return [{"post_id": "p1", "raw": {"comments": comments}}]
-
-
-def test_calc_gender_distribution_metric_no_comments_returns_indisponivel():
-    result = metrics.calc_gender_distribution_metric([])
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-    assert any("amostragem" in r for r in result["ressalvas"])
-
-
-def test_calc_gender_distribution_metric_computes_coverage_and_ressalva():
-    posts = _post_with_comments(
-        [
-            {"username": "maria_silva", "texto": "linda"},
-            {"username": "joao_pedro", "texto": "top"},
-            {"username": "xyz123", "texto": "oi"},
-        ]
-    )
-
-    result = metrics.calc_gender_distribution_metric(posts, names_db=_FASE4_NAMES_DB)
-
-    assert result["status"] == "ok"
-    assert result["unit"] == "percent"
-    assert result["counts"] == {"feminino": 1, "masculino": 1, "indeterminado": 1}
-    assert result["total_identificados"] == 2
-    assert round(result["value"], 4) == round((2 / 3) * 100, 4)
-    assert any("amostragem" in r for r in result["ressalvas"])
-
-
-def test_calc_region_distribution_metric_no_comments_returns_indisponivel():
-    result = metrics.calc_region_distribution_metric([])
-
-    assert result["value"] is None
-    assert result["status"] == "indisponivel"
-
-
-def test_calc_region_distribution_metric_computes_distribution_and_coverage():
-    posts = _post_with_comments(
-        [
-            {"username": "u1", "texto": "moro em sao paulo"},
-            {"username": "u2", "texto": "nada aqui"},
-        ]
-    )
-
-    result = metrics.calc_region_distribution_metric(posts, ddd_to_uf=_FASE4_DDD_TO_UF)
-
-    assert result["status"] == "ok"
-    assert result["unit"] == "percent"
-    assert result["distribuicao"] == [{"uf": "SP", "pct": 1.0}]
-    assert result["value"] == 50.0
-
-
-def test_build_audit_report_wires_gender_and_region_using_injected_dbs():
-    posts = _post_with_comments([{"username": "maria_silva", "texto": "moro em sao paulo"}])
-
-    report = metrics.build_audit_report(
-        posts,
-        followers_count=1000,
-        names_db=_FASE4_NAMES_DB,
-        ddd_to_uf=_FASE4_DDD_TO_UF,
-    )
-
-    assert report["metrics"]["gender_distribution"]["status"] == "ok"
-    assert report["metrics"]["gender_distribution"]["counts"]["feminino"] == 1
+    assert result["veredito"] is None
+
+
+# --- calculate_metrics com Rodadas 2/3 alimentadas (orquestrador completo) -----------------------------------------------------------
+
+def test_calculate_metrics_wires_round_2_and_3_when_inputs_are_provided():
+    payload = {
+        "profile": {"followers_count": 10000},
+        "posts": [
+            {"post_id": "p1", "format": "foto", "reach_unique": 1000, "comments": 2, "shares": 1, "saves": 1, "likes": 10, "is_sponsored": False},
+            {"post_id": "p2", "format": "carrossel", "reach_unique": 1200, "comments": 1, "shares": 0, "saves": 2, "likes": 20, "is_sponsored": True},
+        ],
+        "comment_labels": {"A": 10, "B": 20, "C": 5, "D": 15, "spam": 2},
+        "p2_inputs": {"save_rate": 0.02, "share_rate": 0.01, "vtr": 0.25, "qualified_reach_rate": 0.70},
+        "weekly_consistency": {"values": [5.0, 5.2, 4.8, 5.1, 5.0], "floor": 3.0},
+    }
+    result = metrics.calculate_metrics(payload)
+    assert result["comment_typology"]["status"] == "ok"
+    assert result["bqi"]["status"] == "ok"
+    assert result["ci"]["status"] == "ok"
+    assert result["sponsor_density"]["status"] == "ok"
+    assert result["editorial_opinion"]["status"] == "ok"
+
+
+def test_calculate_metrics_round_2_3_is_deterministic_for_the_same_payload():
+    payload = {
+        "profile": {"followers_count": 10000},
+        "posts": [
+            {"post_id": "p1", "format": "foto", "reach_unique": 1000, "comments": 2, "shares": 1, "saves": 1, "likes": 10, "is_sponsored": False},
+        ],
+        "comment_labels": {"A": 10, "B": 20, "C": 5, "D": 15, "spam": 2},
+        "p2_inputs": {"save_rate": 0.02, "share_rate": 0.01, "vtr": 0.25, "qualified_reach_rate": 0.70},
+    }
+    first = metrics.calculate_metrics(copy.deepcopy(payload))
+    second = metrics.calculate_metrics(copy.deepcopy(payload))
+    assert first == second

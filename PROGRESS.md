@@ -1,584 +1,138 @@
-# PROGRESS.md
+# 📊 PROGRESS.md — Termômetro Físico & Registro de Entregas (v2.0.0)
 
-## Status Atual
-- [x] Infraestrutura física de pastas e arquivos criada.
-- [x] SPEC-001 e DUMMY.md definidos.
-- [x] **ISSUE-0001** — Coleta Local e Cache SQLite. `src/database.py`/`src/scraper.py`
-  (cache, throttling, orquestração) prontos e testados. `instaloader_fetch_fn` (via
-  instaloader, sessão local por arquivo de cookies em `INSTAGRAM_SESSION_FILE`) implementado
-  e **integrado ao pipeline de `app.py`** (usado como `fetch_fn` sempre que o Modo
-  Demonstração está desligado), com fallback gracioso para cache SQLite
-  (`ScraperUnavailableError` só quando não há cache algum, agora tratado como status próprio
-  `erro_coleta_indisponivel` na UI). Reparado na ISSUE-0008: agora também busca comentários
-  reais (`post.get_comments()`) e a data real de publicação de cada post — antes só
-  coletava metadados agregados (likes/contagem de comentários), deixando demografia/pods/
-  Gemini sem nenhum dado real para trabalhar. Reparado nesta sessão (2026-08-12): (1)
-  `load_any_available_session(L)` autodetecta e carrega `~/.config/instaloader/session-*`
-  automaticamente, sem depender de `INSTAGRAM_SESSION_FILE` — antes, sem essa variável, a
-  coleta rodava 100% anônima mesmo havendo sessão salva; (2) corrigido bug real de
-  identidade trocada — `load_session_from_file` era chamado com o username do perfil
-  ANALISADO (ex. `silviabraz`) em vez do dono real dos cookies (ex. `criativododo`),
-  extraído agora do próprio nome do arquivo de sessão; (3) sidebar do Streamlit mostra
-  "Sessão ativa: `<usuario>`" ou avisa quando nenhuma sessão é detectada; (4) `instaloader`
-  estava ausente de `requirements.txt` (drift de dependência) — adicionado. Ambos os bugs de
-  sessão foram **validados com uma chamada real** (não mockada) nesta sessão: a sidebar
-  mostrou corretamente "Sessão ativa: criativododo" e `instaloader_fetch_fn` de fato
-  autenticou e enviou a requisição com a sessão correta. **Porém a validação real revelou
-  que a hipótese original sobre a causa do Erro HTTP 400 estava incompleta**: lendo o código
-  -fonte da lib instalada (`instaloader==4.15.3`), `Profile.from_username()` usa **sempre**
-  o endpoint `api/v1/users/web_profile_info/`, autenticado ou não — não existe, nesta
-  versão, uma rota GraphQL alternativa acionada por login. O 400 observado ao vivo para
-  `@silviabraz` (`"Asset asset://laser.provider/ig_business_category_subvertical has been
-  deleted. You cannot use this schema"`) é um **bug atual no backend do próprio Instagram**
-  nesse endpoint, reproduzido de forma idêntica mesmo com sessão autenticada carregada
-  corretamente — está fora do alcance de qualquer correção no lado do cliente (Instaloader
-  não expõe, na versão pública mais recente, nenhum caminho alternativo em
-  `Profile.from_username`). `@caroline_tanaka` passou pela etapa de perfil sem erro, mas
-  falhou depois ao buscar comentários de um post via `i.instagram.com/api/v1/media/.../
-  comments/` (`"something went wrong"` genérico — possivelmente transitório/rate-limit).
-  Ver `docs/issues/ISSUE-0001.md` (seção "Validação real 2026-08-12") para o log completo e
-  as opções de próximo passo. **Tratamento de erro resiliente adicionado em seguida**:
-  `Profile.from_username()` e a busca de comentários (`_fetch_real_comments`) em
-  `src/scraper.py` agora têm blocos `try/except` específicos (`ConnectionException` e
-  `Exception`) que registram log do perfil/post afetado e seguem em frente — o bug de schema
-  do Instagram vira um `ScraperUnavailableError` com mensagem clara (não sugere problema de
-  sessão), e uma falha na busca de comentários de um post não aborta a coleta dos demais
-  posts do perfil. Ver "Tratamento de erro resiliente" em `docs/issues/ISSUE-0001.md`.
-  **Contorno implementado e validado ao vivo em seguida (2026-08-12)**: (1) corrigido o tipo
-  real da exceção do bug de schema (`QueryReturnedBadRequestException`, que não é subclasse
-  de `ConnectionException` — o `except` anterior nunca capturava o erro de verdade); (2)
-  `_resolve_profile_via_topsearch` contorna o bug de schema resolvendo o perfil via
-  `TopSearchResults` (endpoint diferente) quando logado; (3)
-  `_fetch_comments_first_page_via_graphql` contorna a instabilidade do endpoint de
-  comentários do app iPhone buscando a 1ª página via GraphQL direto; (4) corrigido bug
-  adicional de posts fixados (pinned) antigos escondendo posts recentes reais no corte por
-  janela de data. **Validado ao vivo contra o Instagram real** (por pedido explícito do
-  usuário): `@silviabraz`, que antes falhava 100% com o bug de schema, agora resolve com
-  sucesso via o fallback de topsearch (60 posts coletados); `@caroline_tanaka` confirmou que
-  o endpoint de comentários do app iPhone falha de forma sistemática (100% dos posts
-  amostrados, não pontual/rate-limit), mas o fallback via GraphQL recuperou comentários reais
-  em todos os posts amostrados. ISSUE-0001 considerada **concluída** — ver "Contorno para o
-  bug de schema e para comentários" e "Validação ao vivo do contorno" em
-  `docs/issues/ISSUE-0001.md`.
-- [x] **ISSUE-0002** — Filtragem Heurística e Demografia Local. `src/filters.py`
-  (comentários rasos vs. alta intenção comercial) e `src/demographics.py` (gênero/região,
-  interfaces injetáveis) prontos e testados. Bug do falso positivo "para" (preposição) → PA
-  (Pará) corrigido.
-- [~] **ISSUE-0003** — Processamento Gemini em Lote. `src/gemini_analyzer.py` (batching
-  com teto de 2 chamadas/perfil, schema JSON, fallback gracioso de rate limit) pronto e
-  testado com cliente mockado. **Migrado do SDK legado `google-generativeai` para o SDK
-  oficial atual `google-genai`** (`requirements.txt`: `google-genai==2.17.0`;
-  `RealGeminiClient` usa `from google import genai`/`self._client.models.generate_content`
-  com `config=types.GenerateContentConfig(response_mime_type="application/json")` e
-  `model="gemini-flash-latest"`; captura `google.genai.errors.APIError` para os códigos
-  retryable 429/503, preservando o retry com backoff exponencial `[2, 4, 8]`s e o
-  relançamento de `GeminiRateLimitError`; assinatura pública `generate_content(prompt) ->
-  str` e `RealGeminiClient(model_name=...)` inalteradas para não quebrar `app.py`). Testes
-  em `tests/test_gemini_analyzer.py` mockam a hierarquia real do SDK
-  (`mock_client.models.generate_content`), sem depreciação. **Integrado ao pipeline de
-  `app.py`** (instanciado quando `GEMINI_API_KEY` está no ambiente; ausência tratada graciosamente,
-  sem quebrar o app). Pendente: chamada real à API do Gemini não testada neste ambiente
-  (sem `GEMINI_API_KEY` disponível). Índice de pods deliberadamente fora do schema do
-  Gemini (decisão de engenharia, ver ISSUE-0003.md). Prompt não oferece mais
-  "desconhecida" como faixa etária padrão — o Gemini é instruído a sempre estimar.
-  `summarize_brand_suitability` ganhou `distribuicao_intencao_compra` (proporção
-  alta/média/baixa/nenhuma) e `faixa_etaria_predominante` (moda das faixas conhecidas),
-  ambos exibidos em `app.py` (cards de taxa de comentários qualificados, distribuição de
-  intenção de compra, sentimento e faixa etária predominante) — exportadores HTML/PDF
-  (`src/exporter.py`) deliberadamente não tocados neste incremento (pedido explícito do
-  usuário).
-- [x] **ISSUE-0004** — Dashboard Streamlit e Exportador. `app.py` (pipeline em thread de
-  background, Modo Demonstração, cards de Métricas/Demografia/Antifraude/Publis/Score,
-  conectores reais de scraper e Gemini já plugados) e `src/exporter.py` (HTML/PDF) prontos
-  e testados, com boot real validado via `AppTest`. Corrigido bug real no exportador de PDF
-  (`FPDFException: Not enough horizontal space...` ao renderizar 2+ itens do Gemini ou de
-  publis, por falta de `new_x`/`new_y` explícitos em `multi_cell` dentro de loops).
-  Pendente: RF-09 (publis) segue placeholder explícito; validação fim-a-fim com dados reais
-  (Instagram + Gemini) depende das credenciais pendentes em ISSUE-0001/0003.
-- [x] **ISSUE-0005** — Métricas de Antifraude (Pods) e Score DODÔ. `src/metrics.py`
-  (`calc_pod_index`) e `src/scoring.py` (`calc_engagement_rate`, `calc_dodo_score`)
-  prontos e testados. Pesos do score são heurística não calibrada com dados reais.
-- [x] **ISSUE-0006** — Bases Locais de Demografia. `src/data_loaders.py` carrega 1.984
-  nomes (base curada, derivada de dataset comunitário que cita a API do IBGE) e 67
-  DDD→UF (fonte web, não validada contra a ANATEL oficial nesta sessão — site fora do ar).
-- [x] **ISSUE-0007** — Varredura de Publis (RF-09). `detect_sponsored_posts`
-  (`src/filters.py`) varre legendas via regex (`#publi`, `#ad`, `parceria`, `patrocinado`,
-  menção `@marca`) e está **integrado ao pipeline de `app.py`** (substitui a lista fixa
-  `publis: []`). `demo_fetch_fn` ganhou legendas de exemplo (algumas patrocinadas) para
-  validar o fluxo fim-a-fim sem rede. UI (`_render_publis_card`) e exportador
-  (`src/exporter.py`) não exibem mais texto de "não implementado" — mostram a tabela real
-  ou um estado vazio genuíno (`PUBLIS_VAZIO_MSG`). Também reparado nesta sessão: mensagem de
-  falha de coleta real alinhada ao texto exato exigido (sem sugerir Modo Demonstração como
-  alternativa a dados reais), e `genero_pct` exposto na demografia (prova quantitativa de
-  que o engine já usa a base real do IBGE, não uma amostra sintética).
-- [x] **Pacing/Anti-Ban (branch `worktree-pacing-anti-ban-progresso`, pendente de merge para
-  `main`)** — `src/rate_controller.py` (`RateController`, novo): controlador de pacing
-  conservador com `SafeStop` acionado em 429/403/challenge do Instagram, ligado de verdade
-  ao pipeline real de `app.py` (não só instanciado — usado a cada requisição da coleta).
-  `src/scraper.py` ganhou pacing por post (jitter entre posts, não só entre perfis) e
-  propaga `SafeStop` sem cair no fallback de cache genérico quando a causa é bloqueio de
-  segurança (evita mascarar um 429/checkpoint real como "sem dados"). `app.py` ganhou ETA
-  dinâmico por média móvel (substitui estimativa fixa), mensagem de progresso contextual, o
-  status novo `pausado_seguranca` (quando o `SafeStop` interrompe a coleta) e o botão "Ver
-  Relatório" só libera a exportação HTML/PDF/JSON quando o pipeline chega de fato a
-  `concluido`. Merge para `main` ainda não realizado — ver seção "Pendências" abaixo.
+> [!NOTE]
+> **REGRA DE DOMINÂNCIA FÍSICA:** Este documento retrata exclusivamente a realidade auditável do repositório local. Em caso de divergência com briefings conceituais ou planos futuros, o estado físico aqui registrado prevalece sempre. Atualizado via `/fim` e sincronizado via `/drive`.
 
-## Testes
-**225/225 passando** (`.venv/bin/python -m pytest tests/`, validado nesta sessão a partir
-do branch `worktree-pacing-anti-ban-progresso`), saída limpa quanto ao código do projeto —
-resta 1 `DeprecationWarning` interno da própria lib `google-genai`
-(`google/genai/types.py:42`, sobre `_UnionGenericAlias` do Python 3.14), não originado por
-código deste repositório e fora do alcance de correção local. O SDK do Gemini **já foi
-migrado de `google-generativeai` para `google-genai`** em sessão anterior (commit
-`f7e08a9`, `requirements.txt: google-genai==2.17.0`, já presente em `main` antes deste
-branch existir) — não fazia parte do trabalho pendente desta sessão.
-Evolução: 28 (ISSUE-0001/2/3) → 43 (+ISSUE-0005) → 57 (+ISSUE-0006) → 61 (+ISSUE-0004)
-→ 70 (+fix região "para"/Pará, +`instaloader_fetch_fn` e fallback de cache)
-→ 74 (+integração dos conectores reais no pipeline de `app.py`, +2 testes de `app.py`,
-+2 testes de regressão do bug de PDF no exportador)
-→ 84 (+ISSUE-0007: `detect_sponsored_posts` e sua integração ao pipeline/UI/exportador,
-+prova de integração do engine demográfico com a base real do IBGE, +mensagem exata de
-falha de coleta)
-→ 96 (+ISSUE-0008: comentários reais e janela por data de publicação real em
-`instaloader_fetch_fn`, +`extract_first_name_from_handle`, +filtro de janela e fallback de
-nome em `app.py`, +teste E2E simulando a API do Instaloader fim-a-fim)
-→ 122 (sessão de calibragem/reestruturação do pipeline de dados reais, ver commit
-`d1912fd`/ISSUE-0008 no histórico do git — detalhamento não coberto neste arquivo)
-→ 131 (2026-08-12, reparo dos gargalos de login/Erro HTTP 400: +7 testes de
-`load_any_available_session`/`detect_available_session_username`/autodetecção de sessão em
-`instaloader_fetch_fn` em `tests/test_scraper.py`, +2 testes de feedback de sessão na
-sidebar em `tests/test_app.py`)
-→ 135 (2026-08-12, tratamento de erro resiliente em `Profile.from_username()` e na busca de
-comentários: +4 testes em `tests/test_scraper.py` reproduzindo o erro 400 de schema
-removido e a interrupção parcial da busca de comentários).
-→ 145 (2026-08-12, contorno para o bug de schema via `TopSearchResults` e para a
-instabilidade de comentários via GraphQL direto: +10 testes em `tests/test_scraper.py`,
-validado em seguida ao vivo contra `@silviabraz` e `@caroline_tanaka` reais).
-→ 148 (2026-08-13, retry com backoff exponencial em `RealGeminiClient.generate_content`
-para erros temporários 429/503 do Gemini, encontrado ao vivo no Streamlit: +3 testes em
-`tests/test_gemini_analyzer.py`, ver ISSUE-0003.md).
-→ 162 (2026-08-13, refinamento de qualidade das métricas/prompts do Gemini pedido pelo
-usuário: filtro local reforçado contra elogio genérico decorado e comentários bot-like/spam
-(`src/filters.py`), schema do prompt do Gemini enriquecido com `categoria_sentimento`/
-`sinais_compra`, novo parecer local de aderência comercial (`summarize_brand_suitability`)
-exibido em `app.py`/`src/exporter.py` sem alterar o layout Streamlit: +14 testes em
-`tests/test_filters.py`, `tests/test_gemini_analyzer.py` e `tests/test_exporter.py`, ver
-ISSUE-0003.md).
-→ 168 (2026-08-13, agregados de audiência em nível de perfil: prompt do Gemini não oferece
-mais "desconhecida" como faixa etária padrão, `summarize_brand_suitability` ganhou
-`distribuicao_intencao_compra` e `faixa_etaria_predominante`, novos cards em `app.py`
-(taxa de comentários qualificados, distribuição de intenção de compra, sentimento,
-faixa etária predominante) — `src/exporter.py` deliberadamente intocado neste incremento;
-+6 testes em `tests/test_gemini_analyzer.py` e `tests/test_app.py`. Criado também
-`iniciar_app.command` na raiz, lançador de 1 clique para macOS que cria `.venv`, instala
-dependências e sobe o Streamlit — testado ao vivo, subiu o servidor e respondeu HTTP 200).
-→ (histórico de commits subsequentes em `main`, não detalhado passo a passo neste arquivo:
-migração do SDK do Gemini para `google-genai`, retry 429/503, insights acionáveis de
-campanha, PostScore canônico com duplo ranking — ver `git log main` e
-`docs/issues/ISSUE-0003.md`) → 225 (2026-08-13, branch `worktree-pacing-anti-ban-progresso`:
-+49 testes para `RateController`/pacing por post/`SafeStop`/ETA dinâmico/status
-`pausado_seguranca`/botão Ver Relatório condicionado a `concluido`, ver bullet
-"Pacing/Anti-Ban" acima).
+---
 
-## MVP: o que funciona hoje
-Pipeline completo de ponta a ponta (`app.py`) em **Modo Demonstração** (dados fictícios
-determinísticos, sem rede): input → filtragem → demografia → pods/score → relatório
-HTML/PDF exportável. Validado com boot real via `AppTest` (não apenas testes unitários).
-Fora do Modo Demonstração, o pipeline já usa os conectores reais
-(`scraper.instaloader_fetch_fn` e `gemini_analyzer.RealGeminiClient`, este último só quando
-`GEMINI_API_KEY` está definida). Desde a ISSUE-0008, `instaloader_fetch_fn` busca
-comentários reais (não só metadados agregados de post) e filtra posts pela data real de
-publicação dentro da janela selecionada (30/60/90 dias) — a integração de código está
-completa e **validada ao vivo contra o Instagram real** (`@silviabraz` e `@caroline_tanaka`,
-2026-08-12, ver ISSUE-0001.md), incluindo contornos funcionais para os dois bugs de backend
-do Instagram encontrados no caminho. `RealGeminiClient` ainda não foi exercitado contra o
-Gemini real neste ambiente.
+## 📍 1. Estado Atual da v2.0.0
 
-## O que falta para sair de "demonstração" para uso real
-1. Validar `RealGeminiClient` (`src/gemini_analyzer.py`) contra a API real do Gemini com
-   uma `GEMINI_API_KEY` válida — a integração no pipeline de `app.py` já está completa e
-   testada com mocks; falta a validação com chamada real — ISSUE-0003.
-2. Validação da tabela de DDDs contra a fonte oficial ANATEL (indisponível nesta sessão)
-   e, se desejado, ampliação da base de nomes além do top-1000/gênero.
-3. Calibração dos pesos do Score DODÔ com dados reais de campanha (hoje é heurística).
+* **Sprint Ativa:** Fase 3 — Fim (Integração & Homologação do MVP) **concluída**; MVP v2.0.0 homologado com perfis reais do Instagram. A lacuna de coleta de comentários (bug do endpoint nativo) foi **corrigida** nesta sessão (ver abaixo); resta apenas a lacuna física do Pilar 2 do BQI/piso do CI.
+* **Última Ação Executada (2026-08-16):** Resolução do problema "Tudo Indisponível" — fallback via GraphQL para comentários (portado de `legado/src/scraper.py`) restaurado em `src/features/coleta/scraper.py`, fallback de janela inteligente (perfis com <3 posts/90 dias caem para os últimos 12-15 posts mais recentes), extração do nome de exibição real do comentarista (sem custo de rede extra) para alimentar a demografia IBGE, Modo Demonstração (`Carregar Exemplo (Demo)`) com dataset rico (15 posts/80 comentários) para exercitar o dashboard 100% preenchido (incluindo BQI/CI, indisponíveis em auditorias reais), refinamento visual dos blocos centrais (barras proporcionais de formatos/tipologia, chips de estados, contraste dos inputs) e correção de um bug latente de `UnicodeEncodeError` no exportador PDF (fonte core `helvetica` é latin-1; texto do parecer com travessão só era exercitado agora que BQI/CI/SD ficam resolvidos no Modo Demo). Ver §3 (nova entrada "Resolução da coleta de comentários — 2026-08-16") para o detalhamento e a validação ao vivo contra `@caroline_tanaka`.
+  * **Descoberta e correção de governança no meio do caminho (ISSUE-007):** `docs/issues/manifest.json` já marcava `ISSUE-005` como `"done"` antes de qualquer um dos seus três arquivos-alvo existir de fato no repositório. Reportado ao Dani, que autorizou implementar a ISSUE-005 de verdade antes de prosseguir (33/33 testes).
+  * **Descoberta e resolução de governança nesta rodada (ISSUE-004):** o Dani autorizou aprovar e implementar as Rodadas 2/3 do motor de métricas usando a proposta já registrada em `BENCHMARK-METRICS-001.md §6-9` (ADR-002). Durante a implementação, identificou-se que o Pilar 2 do BQI exige `save_rate`/`share_rate`/`VTR`/`alcance_qualificado` — sinais que a coleta pública via Instaloader não expõe. Reportado ao Dani antes de implementar, que confirmou seguir com a fórmula completa mesmo sabendo que BQI/CI ficam `indisponivel` em auditorias reais até uma expansão futura do coletor.
+* **Histórico:** `ISSUE-001` (Scaffold Visual), `ISSUE-002` (Coleta/Cache/Gatekeeper), `ISSUE-003` (Refinamento Visual & Demografia) e `ISSUE-006` (Exportação PDF/CSV) concluídas em sessões anteriores; `ISSUE-005` (IA híbrida), `ISSUE-004` (Rodadas 2/3) e `ISSUE-007` (End-to-End + Homologação) concluídas em 2026-08-15; fallback de coleta de comentários + Modo Demonstração + refinamento visual concluídos em 2026-08-16.
+* **Lacuna física conhecida e documentada (não escondida):** BQI completo e CI **em auditorias reais** dependem de sinais (`save_rate`/`share_rate`/`VTR`/`alcance_qualificado` para o Pilar 2 do BQI; um piso aprovado para o CI) que a coleta pública via Instaloader não expõe — aparecem como **"Indisponível"** (o Modo Demonstração simula esses sinais só para exercitar o dashboard, nunca em dado real). Tipologia/`V_AB`/Pilar 1, Saturação de Publis (SD) e, desde 2026-08-16, a coleta de comentários (via fallback GraphQL) já são reais hoje.
+* **Próxima Meta:** avaliar uma fonte de dado real para o Pilar 2 do BQI (API de negócios do Instagram, entrada manual, ou outra) e definir o piso numérico do CI — única lacuna física restante.
 
-## Pendências (2026-08-13)
-1. ~~Merge do branch `worktree-pacing-anti-ban-progresso` para `main`~~ — **concluído**
-   em sessão subsequente (2026-08-13): merge fast-forward em `main` (`8e25363`), 225/225
-   testes validados no checkout principal, worktree removido com `git worktree remove`.
-2. `RealGeminiClient` (SDK `google-genai`) segue sem validação contra a API real do Gemini
-   neste ambiente (sem `GEMINI_API_KEY`) — mocks cobrem 100% do contrato, mas não uma
-   chamada de rede real ao endpoint atual.
+---
 
-## Sprint 002 — Contrato canônico de métricas e proveniência (2026-08-13)
-Primeira fase da Sprint 002 (`SPRINT-002/BENCHMARK-001.md` §6/§7, `SPRINT-002/ISSUE-001.md`
-§5.3/§5.4/§6.2, `SPRINT-002/HANDOFF-SPRINT-002.md`), versionados nesta sessão junto com
-`FINDER-0001.md`, `SPRINT-002/FINDER-001.md`, `SPRINT-002/FINDER-002.md` e
-`SPRINT-002/FINDER-003.md` (eram documentação de planejamento pendente, só na raiz do
-checkout principal, nunca commitada).
+## 📁 2. Inventário Físico de Arquivos e Componentes Ativos
 
-- **`src/metrics.py`** ganhou o contrato canônico de auditoria: `build_audit_report(posts,
-  followers_count)` retorna `{"metrics": {...}, "provenance": [...]}`, com as 3 taxas de
-  engajamento formais do benchmark (`calc_engagement_rate_by_followers`,
-  `calc_engagement_rate_by_reach`, `calc_engagement_rate_by_views`). Cada métrica é um
-  objeto autodescritivo — `value`, `unit`, `kind` (`derived`/`None` quando indisponível —
-  ainda não há caso `observed`/`estimated`/`source_estimate` neste contrato inicial,
-  restrito a taxas de engajamento derivadas), `source`, `confidence`, `denominator`,
-  `included_actions`, `post_count`, `status` (`ok`/`indisponivel`) e `ressalvas` — em vez
-  de um número solto, para nunca confundir "sem dado" com `0` silencioso (BENCHMARK-001.md
-  §6: "o contrato também precisa distinguir `null` de zero").
-  - `engagement_rate_by_followers`: média de `(likes + comments) / followers * 100` por
-    post — mesma fórmula de `scoring.calc_engagement_rate`, porém como percentual e com
-    proveniência; indisponível sem posts ou com `followers_count <= 0`.
-  - `engagement_rate_by_reach`: `total_interactions / total_reach * 100`, somando só os
-    posts da amostra com `estimated_reach` — a coleta local (Instaloader/scraping público)
-    não fornece alcance hoje, então esta métrica fica `indisponivel` em qualquer auditoria
-    real até existir uma fonte de alcance (Instagram Insights autenticado).
-  - `engagement_rate_by_views`: `total_interactions / total_views * 100`, restrita a posts
-    com `raw.is_video=True` e `raw.video_view_count` presente — **atualizado na Fase 2 da
-    Sprint 002** (ver seção abaixo) para ler o formato real que `src/scraper.py` passou a
-    popular, substituindo os nomes de campo especulativos (`post_type`/`views_count`) desta
-    entrega inicial.
-  - **Retrocompatibilidade preservada**: `scoring.calc_engagement_rate` (consumido por
-    `app.py`/`src/exporter.py` como `analysis["engagement_rate"]`, um float simples) não
-    foi tocado — o novo contrato é aditivo, ainda não plugado no pipeline/UI (isso é
-    trabalho de uma fase seguinte da Sprint 002, fora do escopo desta entrega).
-- **Testes**: +16 em `tests/test_metrics.py` cobrindo formato do contrato JSON
-  (`json.dumps` sem exceção), as 3 fórmulas com valores conhecidos, preservação de
-  `denominator`/`included_actions`/`post_count` e retorno `None`/`status="indisponivel"`
-  para amostra vazia, seguidores zerados, ausência de `estimated_reach` e ausência de
-  Reels com `views_count` — nunca lança exceção. Suíte completa: 225 → **241 testes,
-  100% verde** (`.venv/bin/python -m pytest tests/`).
+| Caminho Físico | Responsabilidade / Tipo | Status Físico | Conformidade DUMMY.md |
+| --- | --- | --- | --- |
+| `README.md` | Roteador de Contexto e Onboarding de IA | ✅ Ativo / Atualizado | Conforme |
+| `DUMMY.md` | Safety Shield e Regras Inquebráveis | ✅ Ativo / Atualizado | Conforme |
+| `PROGRESS.md` | Termômetro Físico de Entregas | ✅ Ativo / Atualizado | Conforme |
+| `FINDER-001.md` | Manual Canônico de Certezas e SDKs | ⏳ Em consolidação | Conforme |
+| `CLAUDE.md` | Configurações locais de assistência | ✅ Preservado | Conforme |
+| `.env` | Credenciais e chaves de API locais | ✅ Preservado | Chaves fora do código |
+| `data/names_seed.json` | Base IBGE (1.984 nomes para gênero) | ✅ Preservado (Ativo) | Conforme |
+| `data/ddd_uf.json` | Base DDDs Brasil para regionalização | ✅ Preservado (Ativo) | Conforme |
+| `data/cache.db` | Cache local SQLite | ✅ Preservado (Ativo) | Conforme |
+| `~/.config/instaloader/...` | Sessão autenticada do Instaloader | ✅ Preservada (Ativo) | Pacing mantido |
+| `/specs/` | Diretório para especificações ativas | 📁 Criado (Vazio) | Aguardando SPEC-01 |
+| `/decisions/` | Diretório para ADRs | 📁 Criado (Vazio) | Aguardando ADRs |
+| `/docs/issues/` | Diretório para issues atômicas | 📁 Criado (Vazio) | Aguardando manifest |
+| `/src/features/coleta/` | Módulo de scraping e parsing | ✅ Ativo (ISSUE-002) | Conforme |
+| `/src/features/coleta/scraper.py` | Coleta Instaloader (12–15 posts/90 dias, 30–50 comentários/post) | ✅ Ativo | Conforme (sem SQL/HTTP direto na View) |
+| `/src/features/coleta/database.py` | Cache SQLite `profile_cache` (TTL 24h) em `data/cache.db` | ✅ Ativo | Conforme |
+| `/src/features/coleta/auth.py` | `get_secret()`: `st.secrets` → `os.environ`/`.env` | ✅ Ativo | Conforme (zero chave hardcoded) |
+| `/.streamlit/secrets.toml.example` | Template documentando `APP_PASSWORD`/`GEMINI_API_KEY` | ✅ Ativo | Conforme (`.streamlit/secrets.toml` real no `.gitignore`; sem chave Anthropic) |
+| `/tests/test_coleta.py` | Testes unitários do cache, `auth` e scraper mockado | ✅ Ativo (11/11 passando) | Conforme |
+| `/src/features/analise/demographics.py` | Motor de demografia local (gênero por nome IBGE, DDD→UF) | ✅ Ativo (ISSUE-003) | Conforme (puro, zero rede/banco) |
+| `/tests/test_demographics.py` | Testes unitários de gênero e extração de DDD | ✅ Ativo (13/13 passando) | Conforme |
+| `/src/features/analise/metrics.py` | Motor de métricas autorais — Rodada 1 (ER Branding) + Rodadas 2/3 (tipologia/V_AB/P1, P2, P3, BQI, CI, SD, parecer combinado) | ✅ Ativo (ISSUE-004, done) | Conforme (puro, zero rede/banco/Streamlit) |
+| `/tests/test_metrics.py` | Testes unitários de todas as Rodadas (pesos, formato, denominador, pilares, BQI, CI, SD, parecer, indisponibilidade) | ✅ Ativo (50/50 passando) | Conforme |
+| `/decisions/ADR-002-rodadas-2-3-metricas-autorais.md` | Decisão de aprovação das Rodadas 2/3 e da lacuna física do Pilar 2/BQI/CI | ✅ Ativo | Conforme |
+| `/.streamlit/config.toml` | Tema nativo (cores, raio 12px, fontes via Google Fonts) | ✅ Ativo (ISSUE-001/003) | Conforme |
+| `/src/app.py` | View pura + Gatekeeper + CSS sob medida + botão "Auditar Perfil" (pipeline real: coleta/cache → demografia → triagem IA → métricas → render) + download PDF/CSV | ✅ Ativo (ISSUE-001/002/003/006/007) | Conforme (zero `sqlite3`/`requests`/`urllib3` diretos) |
+| `/src/features/relatorios/pdf_exporter.py` | Gerador de PDF editorial A4 via fpdf2 (paleta Cannoli/Vermelho Haute) | ✅ Ativo (ISSUE-006) | Conforme (puro, zero rede/banco/disco) |
+| `/src/features/relatorios/csv_exporter.py` | Gerador de CSV `utf-8-sig` (metadados, métricas, posts) | ✅ Ativo (ISSUE-006) | Conforme (puro, zero rede/banco/disco) |
+| `/tests/test_relatorios.py` | Testes unitários dos exportadores (bytes válidos, placeholders, determinismo) | ✅ Ativo (13/13 passando) | Conforme |
+| `/src/features/analise/ai_local.py` | Heurística local (D conservador, dedup por hash, parecer templateado de fallback) | ✅ Ativo (ISSUE-005) | Conforme (puro, zero rede/banco/Streamlit) |
+| `/src/features/analise/ai_gemini.py` | Cliente Gemini 2.5 Flash (schema estrito, batching 100/2 lotes, cadeia local→Gemini→fallback, cache injetável) | ✅ Ativo (ISSUE-005) | Conforme (SDK só via import preguiçoso em `get_gemini_client`) |
+| `/tests/test_ai_integration.py` | Testes unitários da heurística, schema, batching, rate limit, modo sem chave, parecer e proveniência | ✅ Ativo (33/33 passando) | Conforme (cliente sempre mockado/injetado) |
+| `/iniciar_app.command` | Launcher macOS de 1 clique (`cd` + ativa `.venv` + `streamlit run`) | ✅ Ativo e executável (ISSUE-007) | Conforme (validado subindo o Streamlit real) |
+| `/tests/test_integration_e2e.py` | Testes de integração end-to-end via `AppTest` (cache, real mockado, coleta indisponível, sem posts, exportação) | ✅ Ativo (9/9 passando) | Conforme (scraper/database/Gemini sempre mockados) |
+| `/legado/` | Repositório histórico (157 arquivos) | 📦 Isolado | Ignorado por padrão — consultado sob autorização da SPEC-001 (§referências) para os padrões de resiliência do Instaloader reaproveitados em `scraper.py` |
 
-## Sprint 002 — Fase 2: Reels, integração ao pipeline/cache e exportador (2026-08-13)
-Segunda fase da Sprint 002 (branch `worktree-sprint-002-fase2-reels-exportador`, mesclada em
-`main` após a Fase 1). Liga o contrato canônico de métricas (Fase 1) ao pipeline real, com
-detecção de formato de post/Reels na coleta.
+---
 
-- **`src/scraper.py`** (`instaloader_fetch_fn`) — novo `_extract_media_metadata(post)`
-  popula `raw.media_type` (`"IMAGE"`/`"REEL"`/`"CAROUSEL"`, mapeado do `post.typename` bruto
-  do Instaloader — `"GraphImage"`/`"GraphVideo"`/`"GraphSidecar"`), `raw.is_video`
-  (`post.is_video`) e `raw.video_view_count` (`post.video_view_count`, só para vídeos).
-  Nunca lança exceção: qualquer falha ao ler esses atributos (campo ausente na resposta do
-  Instagram) cai no valor mais conservador (`IMAGE`/`False`/`None`), mesmo padrão de
-  resiliência já usado no resto do módulo.
-- **`app.py`** (`demo_fetch_fn`) — mesma correção não estava no escopo original do `/goal`
-  (que a listava por engano em `src/scraper.py`; `demo_fetch_fn` sempre viveu em `app.py`),
-  mas foi replicada aqui: alterna `CAROUSEL`/`REEL`/`IMAGE` a cada 3 posts (2 Reels por
-  janela de 6 posts, com `video_view_count` sintético), para o Modo Demonstração exercitar
-  `engagement_rate_by_views` fim a fim sem precisar de credenciais reais.
-- **`src/metrics.py`** — `calc_engagement_rate_by_views` reescrita para ler
-  `raw.is_video`/`raw.video_view_count` (formato real que o scraper agora popula) em vez
-  dos nomes especulativos da Fase 1 (`post_type`/`views_count`); `source`/`denominator`
-  atualizados para `post_level_video_view_count`/`video_view_count`. Continua retornando
-  `status="indisponivel"`/`value=None` sem lançar exceção quando não há vídeo com views na
-  amostra.
-- **`src/database.py`** — nova coluna `profiles.audit_report` (migração idempotente, mesmo
-  padrão já usado para a coluna `source`) e nova função `save_audit_report(username,
-  audit_report, db_path=...)`: persiste o payload canônico (JSON) via `UPDATE` — **nunca
-  toca em `posts_cache`** nem reusa `save_profile_data` (que apagaria e regravaria os posts
-  se chamada com lista vazia), justamente para não correr nenhum risco sobre o cache de
-  posts já coletados (DUMMY.md #5). `get_cached_data` passou a incluir `"audit_report"`
-  (`None` quando nunca foi salvo — retrocompatível com linhas antigas).
-- **`app.py`** (`_run_pipeline`) — chama `metrics.build_audit_report(posts, followers_count)`
-  logo após `pod_result`/`engagement_rate`, persiste via `database.save_audit_report` e
-  anexa o resultado em `analysis["audit_report"]`. `analysis["engagement_rate"]` (float
-  legado consumido por `app.py`/`src/exporter.py`) continua sendo calculado exatamente como
-  antes — nenhuma chave legada foi removida ou alterada.
-- **`src/exporter.py`** — nova seção "Proveniência e Escopo das Métricas" no HTML (tabela:
-  tipo de cálculo, valor, status, fonte, confiança) e no PDF (mesmas informações em texto),
-  a partir de `analysis.get("audit_report")`. Quando `audit_report` está ausente (relatórios
-  gerados antes desta fase, ou falha ao computá-lo), mostra uma nota explicativa em vez de
-  lançar exceção — todos os testes de exportador anteriores a esta fase (que não passam
-  `audit_report`) continuam verdes sem nenhuma alteração, prova da retrocompatibilidade.
-- **Testes**: +4 em `tests/test_scraper.py` (media_type/is_video/video_view_count para
-  Reel/Image/Carousel + resiliência a atributos que lançam exceção), +4 em
-  `tests/test_database.py` (persistência/leitura do `audit_report`, isolamento de
-  `posts_cache`, safety quando o perfil nunca foi salvo), +1 em `tests/test_app.py`
-  (integração real: Modo Demonstração produz `audit_report` com `engagement_rate_by_views`
-  disponível, e o cache SQLite reflete o mesmo relatório), +5 em `tests/test_exporter.py`
-  (seção de proveniência presente/ausente em HTML e PDF). Suíte completa: 241 → **255
-  testes, 100% verde** (`.venv/bin/python -m pytest tests/`).
+## 🧪 3. Status de Validação e Testes Binários
 
-## Sprint 002 — Fase 3: card de proveniência na UI e decomposição de autenticidade (2026-08-13)
-Terceira fase da Sprint 002 (branch `worktree-sprint-002-fase3-provenience-ui`, criado a
-partir do merge fast-forward da Fase 2 em `main`). Fecha o ciclo "contrato canônico → cache
-→ exportador → UI" iniciado na Fase 1, e decompõe os sinais de autenticidade da audiência
-que antes só existiam soltos em `analysis["antifraude"]` (`app.py`) no mesmo contrato
-autodescritivo do `audit_report`.
+* **Validação de Purge Histórico:** ✅ Concluída (157 arquivos movidos para `/legado/`, sem resíduos antigos na raiz).
+* **Validação de Estrutura de Diretórios:** ✅ Concluída (Pastas `specs/`, `decisions/`, `docs/issues/` e `src/features/` criadas).
+* **Validação de Segurança de Credenciais:** ✅ Concluída (Ausência de API Keys ou senhas em arquivos de texto plano versionáveis; `.streamlit/secrets.toml` real adicionado ao `.gitignore` na ISSUE-002).
+* **ISSUE-002 — Testes Unitários (`pytest tests/test_coleta.py`):** ✅ **11/11 passando** — cache SQLite (gravação/leitura válida, expiração de TTL via timestamp retroativo, normalização de `@username`), `auth.get_secret` (fallback `.env`/`os.environ`), scraper mockado (classificação de formato, flag `is_sponsored`, corte de janela de 90 dias, fallback estruturado para cache em `TooManyRequestsException`, `ScraperError` quando não há cache).
+* **ISSUE-002 — Password Gatekeeper (validação visual, Playwright):** ✅ Confirmado ao vivo com `APP_PASSWORD` de teste — app bloqueado no login, erro exibido para senha incorreta, liberação imediata do dashboard após senha correta; e confirmado que o fluxo permanece sem gate (dashboard direto) quando `APP_PASSWORD` não está configurado. Zero erros de console em ambos os casos.
+* **ISSUE-002 — Pendência de validação real:** o critério de aceite "coleta completa em < 60s contra um perfil real do Instagram" **não foi exercitado nesta sessão** (só testado com Instaloader mockado, sem chamada de rede) — depende de sessão autenticada local e de um perfil real para ser validado ao vivo.
+* **ISSUE-003 — Testes Unitários (`pytest tests/test_demographics.py`):** ✅ **13/13 passando** — gênero (nome feminino/masculino comuns, nome desconhecido, amostra mista com percentuais somando 100%, extração de primeiro nome de nome completo e de username estilo Instagram, nome acentuado casando com dataset sem acento, contrato zerado para lista vazia) e DDD (extração com/sem parênteses, rejeição de falsos positivos como anos/CEP, ranking Top 3 por frequência, contrato zerado para lista vazia). Suíte completa do projeto: **24/24 passando** (`tests/test_coleta.py` + `tests/test_demographics.py`).
+* **ISSUE-003 — Performance Demográfica:** ✅ 500 nomes (amostra aleatória do próprio dataset + nomes fictícios) processados em **0.705ms**, bem abaixo do limite de 50ms do critério de aceite.
+* **ISSUE-003 — Refinamento Visual (validação visual, Playwright):** ✅ Confirmado ao vivo — cards com `background-color: #FAF9F5`, `box-shadow: 0 2px 8px rgba(0,0,0,0.04)` e `border-radius: 12px` (computados via DOM, não só CSS declarado); `st.metric` com `font-family: "IBM Plex Mono", monospace`; títulos com `"Work Sans"`; corpo com `"Elms Sans", Inter` (fallback via Google Fonts, já que "Elms Sans" não é uma fonte pública — carrega se instalada localmente, senão usa Inter). Testado em desktop (1440×1000) e mobile (390×844), sem overflow. Zero erros de console em ambos.
+* **ISSUE-003 — Card de Demografia com dado real:** ✅ `src/app.py` agora chama `demographics.estimate_gender_distribution`/`estimate_location_by_ddd` de verdade (não mais percentuais hardcoded) sobre uma amostra mockada de 15 nomes/5 bios — resultado observado: Feminino 53.3% / Masculino 33.3% / Indeterminado 13.3% (cobertura 86.6%) e Top 3 estados SP/RJ/MG. Caminho "Indisponível / Cobertura insuficiente" (DUMMY.md/ISSUE-003 restrição de zero silencioso) implementado e coberto indiretamente pelos testes de `demographics.py` (cobertura 0% quando nada é reconhecido) — não fotografado ao vivo nesta sessão por não haver uma amostra 100% não reconhecida no mock atual.
+* **ISSUE-004 — Núcleo Rodada 1 via TDD (`pytest tests/test_metrics.py`):** ✅ **24/24 passando**, escritos antes da implementação (RED confirmado por `ImportError` antes de `metrics.py` existir) — `weighted_interactions` (pesos 3/3/2/3 de comentários/compartilhamentos/salvamentos/curtidas), `format_factor` (carrossel 1,20 / foto 1,00 / reel 0,80; formato desconhecido retorna `None`, nunca peso implícito), `resolve_denominator` (prioriza `reach_unique`; fallback para `followers_count` só quando ausente ou `<= 0`; respeita `denominator_preference=reach_unique_only`), `calculate_er_branding` (alcance puro, fallback puro, mistura reach+followers sem descartar posts, formato desconhecido excluído e sinalizado em `warnings`, denominador indisponível/zero nunca produz taxa numérica), `calculate_er_by_format`, `calculate_stories_context` (Stories nunca alteram o ER Branding — testado por igualdade de valor com/sem Stories no mesmo payload) e o orquestrador `calculate_metrics` (contrato de chaves top-level, stubs `pending_round_2`/`pending_round_3`, determinismo para o mesmo payload, cobertura de `reach_unique`). Suíte completa do projeto: **48/48 passando** (`tests/test_coleta.py` + `tests/test_demographics.py` + `tests/test_metrics.py`).
+* **ISSUE-004 — Governança da Rodada 1:** ✅ `specs/SPEC-001.md §4.1` atualizada com os pesos da Rodada 1 (substituindo os valores preliminares 5/4/4/1 e Reel 1,0/Carrossel 1,1/Foto 0,9, que nunca chegaram a ser implementados).
+* **ISSUE-004 — Rodadas 2/3 via TDD (`pytest tests/test_metrics.py`):** ✅ **50/50 passando** (24 da Rodada 1 + 26 novos), escritos antes da implementação (RED confirmado). `calculate_comment_typology` (V_AB e Pilar 1 a partir de rótulos A/B/C/D já resolvidos pela ISSUE-005, nunca reclassifica texto; divisão por zero nunca vira aprovação automática). `calculate_noise_reduction` (Pilar 3, proporção de `D`/spam). `calculate_visual_retention` (Pilar 2 — `indisponivel` sem os 4 sinais simultâneos; clip 0-100 para valores fora da banda). `calculate_bqi` (combinação dos 3 pilares, faixas 80/65/50, `indisponivel` sem P1/P2, aviso explícito quando P3 falta). `calculate_sponsor_density` (SD real via `is_sponsored`, exclui Stories/formato desconhecido dos comparáveis). `calculate_consistency` (CI — exige `floor` explícito e ≥2 semanas, nunca inventa o piso). `calculate_editorial_opinion` (parecer matemático combinado; bloqueador sempre vence; `indisponivel` sem BQI/V_AB/CI/SD simultâneos). Suíte completa do projeto: **129/129 passando**.
+* **ISSUE-004 — Governança das Rodadas 2/3:** ✅ ADR-002 criada e aprovada (`decisions/ADR-002-rodadas-2-3-metricas-autorais.md`). `specs/SPEC-001.md §4.2/§4.4` atualizada com a fórmula completa (Pilares 1/2/3, BQI, CI, SD, tabela de parecer combinado), incluindo a ressalva física do Pilar 2. `docs/issues/issue-004-motor-metricas-autorais.md` atualizado para `implemented`, preservando o histórico das perguntas originais como resolvidas. `docs/issues/manifest.json` atualizado para `status: "done"` com a ressalva física registrada explicitamente na nota — BQI/CI continuam `indisponivel` em auditorias reais, e isso não foi escondido.
+* **ISSUE-006 — Exportadores via TDD (`pytest tests/test_relatorios.py`):** ✅ **13/13 passando**, escritos antes da implementação (RED confirmado por `ImportError` antes de `pdf_exporter.py`/`csv_exporter.py` existirem) — `generate_csv_report` (bytes `utf-8-sig` com BOM, metadados do perfil/marca/janela/versão de fórmula, métricas consolidadas, tabela de posts sem fabricar linha quando `posts` está ausente, placeholder `indisponivel` explícito para métrica ausente, determinismo byte-a-byte) e `generate_pdf_report` (bytes `%PDF` válidos e não vazios, inclui texto do perfil/marca e o carimbo de proveniência, não quebra com blocos opcionais ausentes — formatos/tipologia/demografia/parecer/provenance/posts —, placeholder `indisponivel` para métrica ausente, determinismo byte-a-byte). Ambos os exportadores deliberadamente **não** chamam relógio/`datetime.now()` — o carimbo de geração só aparece se vier explícito em `provenance.generated_at_utc`, o que também é o que garante a idempotência exigida pela governança da issue (§5). Suíte completa do projeto: **61/61 passando**.
+* **ISSUE-006 — Validação visual do PDF:** ✅ Inspecionado o PDF renderizado (payload completo) — layout A4 limpo, sem sobreposição de texto, cores Cannoli `(245,244,236)` e Vermelho Haute `(129,1,0)` aplicadas nos cards/título/caixa de parecer. Bug real encontrado e corrigido durante essa inspeção: `fpdf2` não reseta o cursor `x` para a margem esquerda após `multi_cell()`, o que fazia o título "Ressalvas para o briefing" ser desenhado a partir da borda direita residual da chamada anterior — corrigido com `pdf.set_x(pdf.l_margin)` explícito após cada `multi_cell()` em `_draw_parecer`. Também corrigido `UnicodeEncodeError` do em-dash (`—`, fora do charset `latin-1` das fontes core do fpdf2) no título do header.
+* **ISSUE-006 — Integração end-to-end no navegador (Playwright, `streamlit run src/app.py`):** ✅ App carregado sem erros de console (só warnings pré-existentes do Vega-Lite dos gráficos de barra, ISSUE-003, fora do escopo); clique real em "Exportar relatório em PDF" e "Baixar CSV" disparou download de fato (`metricaDODO_perfilexemplo_2026-08-15.pdf`/`.csv`, PDF 1 página válida, CSV com BOM), sem reload de página. Conteúdo do CSV baixado confirmado batendo com `MOCK_REPORT` (`er_branding_pct,4.8` etc.) e mostrando `indisponivel` para `formula_version`/`gerado_em_utc`/posts — o mock atual em `src/app.py` não carrega `provenance`/`posts`, então nenhum dado foi fabricado para preencher esses campos.
+* **ISSUE-005 — Heurística local + Gemini via TDD (`pytest tests/test_ai_integration.py`):** ✅ **33/33 passando**, escritos antes da implementação (RED confirmado por `ImportError` antes de `ai_local.py`/`ai_gemini.py` existirem). Heurística (`ai_local.py`): vazio/emoji-only/spam evidente/reação repetitiva classificados como `D` localmente; elogio curto ("Amei") e pergunta comercial ("onde compro?") **não** são classificados localmente (seguem para o Gemini, conforme a restrição explícita do issue contra falso positivo). Schema (`ai_gemini._validate_classification_item`): aceita contrato válido e `label=null`/`confidence=low`; rejeita campo ausente, campo extra, enum inválida e `evidence` que não é um trecho literal do comentário original. Gemini mockado: batching em até 2 lotes de 100, dedup por hash com reuso de cache, resposta reordenada por `comment_id`, cliente sempre injetado (nunca API real). Prompt injection: comentário contendo "ignore as regras..." é tratado como dado delimitado, sem alterar a validação do schema. Rate limit: `GeminiRateLimitError` aciona `local_fallback` sem retry em loop. Modo sem chave: `get_gemini_client(None)` retorna `None`; `triage_comments(client=None)` nunca chama rede. Parecer: `build_local_opinion`/`generate_parecer` sempre com exatamente 3 pontos fortes e 2 alertas quando utilizável, `indisponivel` explícito com `lacunas_de_dados` quando BQI/CI/SD faltam. Proveniência: `provider_used`/`fallback_level`/`status`/`confidence` sempre preenchidos, em local e Gemini. Determinismo: mesma entrada local produz mesma saída. Suíte completa do projeto: **94/94 passando**.
+* **ISSUE-007 — Orquestração real em `src/app.py`:** ✅ Botão "Auditar Perfil" liga `database.get_cached_profile` (cache 24h) → `scraper.collect_profile` (coleta real com fallback estruturado para `ScraperError`) → `demographics.estimate_gender_distribution`/`estimate_location_by_ddd` (sobre `username`/`texto` reais dos comentários coletados, não mais só a amostra mockada) → `ai_gemini.triage_comments` (triagem A/B/C/D real, `client=None` em modo convidado) → `metrics.calculate_metrics` (ER Branding Rodada 1 real) → payload único renderizado no Bento Grid e consumido pelos exportadores PDF/CSV já existentes. Limitação documentada e não escondida: a API pública do Instagram (via Instaloader) não expõe `reach`/`shares`/`saves` por post — o ER Branding real usa apenas Comentários e Curtidas, com aviso explícito em `warnings`; BQI/CI/SD permanecem `None` → "Indisponível" na tela (Rodadas 2/3 da ISSUE-004 bloqueadas) e o parecer usa sempre o template local honesto (nunca pede ao Gemini para arbitrar um veredito sobre métricas centrais ausentes).
+* **ISSUE-007 — Cards resilientes a dado ausente:** ✅ `_bqi_status`/`_ci_status`/`_sd_status` agora tratam `None` → badge "Indisponível" (cinza) em vez de `TypeError` na comparação; card de ER/BQI/CI/SD mostra o texto "Indisponível" em vez de `"None%"`; bloco de formatos mostra "Indisponível — nenhum post no período analisado" em vez de tentar `st.bar_chart` sobre um DataFrame vazio (que quebraria com `KeyError`).
+* **ISSUE-007 — Testes de integração via `AppTest` (`pytest tests/test_integration_e2e.py`):** ✅ **9/9 passando** — `scraper.collect_profile`, `database.get_cached_profile` e `ai_gemini.get_gemini_client` sempre mockados/injetados (nunca rede real). Cobre: fluxo completo sem exceções; payload final com `provenance.method_version`/`window_days`/`posts_n`; BQI/CI/SD sempre `None` (nunca fabricados) enquanto a ISSUE-004 estiver parcial; tipologia/formatos agregados do pipeline real; parecer "Indisponível" com ressalva explícita quando faltam BQI/CI/SD; modo cache (confirma que `scraper.collect_profile` **não** é chamado quando há cache válido); coleta indisponível (sem cache, `ScraperError` — `st.error` exibido, `MOCK_REPORT` preservado em `session_state`, sem exceção não tratada); perfil sem posts no período (sem `ZeroDivisionError`, `formatos=[]`, `tipologia` zerada); exportação PDF/CSV a partir do payload real orquestrado (bytes válidos, não só do `MOCK_REPORT`).
+* **ISSUE-007 — Launcher `iniciar_app.command`:** ✅ Criado, `chmod +x` aplicado, validado subindo o Streamlit real (`.venv` do projeto ativado com sucesso via `source .venv/bin/activate`, app respondendo HTTP 200 na porta configurada). Caminho "sem `.venv`" coberto pela cadeia `|| source venv/bin/activate 2>/dev/null || true` — se nenhum ambiente virtual existir, o script não esconde uma falha real subsequente do `streamlit run` (não usa `set -e` nem suprime esse erro).
+* **Homologação real 2026-08-15 — 3 perfis reais do Instagram (`@silviabraz`, `@caroline_tanaka`, `@juuchika`, autorizado explicitamente pelo Dani):** coleta acionada de verdade contra a API do Instagram via a sessão real do Instaloader (`~/.config/instaloader/session-elafashiomkt`).
+  * **`@silviabraz`:** confirmou um bug real do backend do próprio Instagram (endpoint `web_profile_info` retorna 400 — schema `ig_business_category_subvertical` foi removido) — tratado graciosamente: `scraper.ScraperError` → `st.error` exibido → `MOCK_REPORT` preservado em `session_state`, sem crash. Critério de aceite "erro de coleta tratado sem quebra" ✅ confirmado ao vivo.
+  * **`@caroline_tanaka` e `@juuchika`:** perfil e posts coletados com sucesso, mas **0 comentários reais** em ambos — o endpoint de comentários (`i.instagram.com/api/v1/media/{id}/comments/`) falhou com "something went wrong" em 100% dos posts testados, disparando o retry/backoff interno do Instaloader por post. Para `@juuchika`: coleta completa levou **143,9s**, acima do critério de aceite de **<60s** — causado inteiramente por esse bug de coleta de comentários, não pela app. **Bug real, físico, não corrigido nesta sessão** (fora do escopo do prompt de homologação) — a v1.0.0 legada tinha um fallback via GraphQL para esse exato problema (`legado/src/scraper.py`) que a reescrita `scraper.py` da v2.0.0 (ISSUE-002) não replicou. Registrado como pendência física explícita para uma issue futura de coleta.
+  * **Cache SQLite (critério <1s):** ✅ confirmado — 2ª consulta de `@juuchika` via `database.get_cached_profile` em **0,4ms**, muito abaixo do critério.
+  * **Pipeline completo com dado real (`@juuchika`, via cache):** ER Branding real 4,6% (fallback para seguidores como denominador — `reach_unique` não é público, aviso explícito); BQI/CI corretamente "Indisponível"; SD real 0,0% (nenhum dos 15 posts marcado como patrocinado); tipologia zerada (reflexo honesto de 0 comentários reais coletados, não fabricação); demografia "Indisponível / Cobertura insuficiente" (mesma causa). PDF (4062 bytes) e CSV (1415 bytes, BOM) gerados com sucesso a partir do payload 100% real.
+* **Pente-fino de UI/UX (Playwright, ao vivo):** ✅ Corrigido um estado vazio real e feio descoberto durante a homologação: o card "Tipologia de comentários" tentava desenhar um `st.bar_chart` sobre dado totalmente zerado (perfil sem comentários coletados), produzindo um eixo `0.000000` sem sentido — agora mostra "Indisponível — nenhum comentário classificado nesta amostra", no mesmo padrão já usado pelos cards de formatos e demografia. Adicionado `margin-top`/transição sutil de sombra em hover aos botões primários (`Auditar Perfil`, exportação PDF/CSV) via `_CUSTOM_CSS`, escopado pelas classes estáveis `.st-key-btn_*` — sem framework CSS externo, conforme DUMMY.md Risco 3. Confirmado que os demais tokens do Design System Dodô (Cannoli `#F5F4EC`, Vermelho Haute `#810100`, cards com sombra/raio 12px, IBM Plex Mono nos números, hierarquia Work Sans/corpo) já estavam corretamente implementados desde a ISSUE-001/003 — nenhuma alteração foi necessária ali.
+* **Suíte completa do projeto após a homologação final:** ✅ **129/129 passando** (`test_coleta` 11 + `test_demographics` 13 + `test_metrics` 50 + `test_relatorios` 13 + `test_ai_integration` 33 + `test_integration_e2e` 9).
 
-- **Merge & limpeza**: `worktree-sprint-002-fase2-reels-exportador` mesclado em `main`
-  (fast-forward, `39483a8`), suíte validada (255/255) antes e depois, worktree removido com
-  `git worktree remove`. O branch em si foi preservado (só a worktree foi removida) —
-  já está 100% contido em `main`.
-- **`iniciar_app.command`** — já existia na raiz desde a Fase 2 (ver entrega de 2026-08-13
-  acima); endurecido nesta sessão com `set -Eeuo pipefail` e `exec` na chamada final do
-  Streamlit (substitui o processo do shell em vez de deixar um processo bash pendurado).
-  Nenhum script duplicado/antigo de inicialização encontrado na raiz ou subpastas — só
-  existia essa versão.
-- **`src/metrics.py`** — `build_audit_report` ganhou 4 novos campos em `metrics`, além das 3
-  taxas de engajamento (BENCHMARK-001.md §4.3/§7.2), reaproveitando os comentários já
-  presentes em `post.raw.comments` (o mesmo formato que `app.py` já usa para montar
-  `all_comments_flat`), sem exigir nenhum parâmetro novo em `build_audit_report(posts,
-  followers_count)`:
-  - `pod_index`: reaproveita `calc_pod_index`, expõe o valor em percentual, `top_repetidores`
-    e uma classificação de risco (`classify_pod_risk`: "baixo" < 10%, "médio" 10-25%, "alto"
-    > 25%). `indisponivel` sem nenhum comentário coletado na amostra.
-  - `shallow_ratio`: proporção de comentários classificados como rasos por
-    `filters.is_shallow_comment` (emoji solto, elogio genérico, spam/bot) — os mesmos
-    descartados localmente antes de qualquer envio ao Gemini (DUMMY.md #2).
-  - `creator_response_rate`: proporção de comentários com o sinal `respondido=True` (já
-    populado por `src/scraper.py` em coleta real e pelo Modo Demonstração).
-  - `audience_authenticity_signal`: sinal probabilístico composto (`is_estimated=True`),
-    reaproveitando `estimate_fake_followers_risk` sobre o par (déficit do
-    `engagement_rate_by_followers` canônico vs. benchmark do porte, `pod_index` do próprio
-    relatório) — nunca um detector de seguidores falsos equivalente a ferramentas
-    comerciais, ressalva explícita sempre presente. `indisponivel` quando o `pod_index` de
-    origem também está indisponível, para não fabricar um sinal sem nenhum lastro na
-    audiência.
-  - Cada um dos 4 campos segue o mesmo envelope-base das taxas de engajamento (`value`,
-    `unit`, `kind`, `source`, `confidence`, `status`, `ressalvas`), com campos extras
-    próprios (`top_repetidores`/`risk`, `shallow_count`/`total_count`,
-    `responded_count`/`total_count`, `is_estimated`/`method`). `provenance` passou de 3 para
-    7 entradas. **Retrocompatível**: `analysis["antifraude"]` (`app.py`) e a seção de
-    proveniência do exportador (que só lê as 3 taxas de engajamento por nome de campo fixo)
-    não foram alterados nem quebrados.
-  - **Testes**: +11 em `tests/test_metrics.py` (classificação de risco do pod, as 4 métricas
-    novas isoladamente — caso disponível e indisponível — e o novo formato estrutural do
-    `audit_report` com 7 campos).
-- **`app.py`** — novo card "Proveniência e Escopo das Métricas" (`_render_provenance_card`,
-  chamado logo após `_render_metric_cards`), consumindo `analysis.get("audit_report", {})`:
-  uma linha por taxa de engajamento (seguidores/alcance/views de Reels) com status
-  ("Disponível"/"Indisponível"), valor, denominador, tipo de cálculo e fonte, mais as
-  ressalvas quando existirem; bloco adicional "Reels na amostra" (contagem de vídeos com
-  views coletadas + taxa de engajamento por views) só aparece quando
-  `engagement_rate_by_views` está disponível. Degrada graciosamente (sem lançar exceção)
-  quando `audit_report`/`metrics` estão ausentes ou vazios — cobre tanto relatórios
-  antigos (pré-Sprint-002 Fase 2) quanto qualquer falha ao computar o relatório.
-  - **Testes**: +1 `AppTest` fim a fim (Modo Demonstração: seguidores e views aparecem
-    "Disponível", alcance aparece "Indisponível" — a demo não gera `estimated_reach`) +1
-    chamada direta a `_render_provenance_card` com `analysis` sem `audit_report`/vazio,
-    provando que não lança exceção.
-- **Suíte completa**: 255 → **268 testes, 100% verde** (`.venv/bin/python -m pytest
-  tests/`), validada no checkout principal após o merge desta fase.
-- Verificação visual em navegador real não foi possível nesta sessão (ambiente de background
-  sem extensão Chrome conectada) — a cobertura via `AppTest` acima valida o texto exato
-  renderizado (subheader, markdown, captions), mas fica como pendência para validação visual
-  manual antes de considerar o card "aprovado" do ponto de vista de design.
+* **Resolução da coleta de comentários — 2026-08-16:** a lacuna física registrada em §1/§6 na sessão anterior (bug do endpoint de comentários, 0 comentários reais em 2 de 3 perfis) foi corrigida.
+  * **Fallback via GraphQL (`src/features/coleta/scraper.py`):** `_fetch_comments_via_graphql` porta o workaround de `legado/src/scraper.py::_fetch_comments_first_page_via_graphql` (mesmo `query_hash`) — acionado só quando `post.get_comments()` (endpoint nativo do app iPhone) falha sem coletar nada. Validado ao vivo contra `@caroline_tanaka` (sessão real `~/.config/instaloader/session-elafashiomkt`): o endpoint nativo reproduziu o mesmo bug já documentado (`"something went wrong"` em 100% dos 15 posts), e o fallback GraphQL recuperou comentários reais em **todos os 15 posts** — **113 comentários reais coletados** (contra 0 na sessão anterior).
+  * **Nome de exibição do comentarista:** `_extract_comment_owner_display_name` lê `full_name` direto do `iphone_struct` já presente no payload do endpoint nativo (grátis, sem requisição extra) — só usado quando o comentário veio por esse caminho; comentários recuperados via fallback GraphQL não têm `full_name` disponível sem custo de rede extra, então caem para o `@username` na demografia (mesmo comportamento de antes).
+  * **Fallback de janela inteligente:** perfis com menos de 3 posts nos últimos 90 dias agora caem automaticamente para os últimos 12-15 posts mais recentes disponíveis, com warning explícito (`"Janela estendida: analisando os últimos N posts mais recentes"`) propagado até `report["warnings"]` e refletido no rótulo da janela na UI — nunca uma auditoria vazia por causa só da rigidez da janela de 90 dias.
+  * **Ressalva física remanescente (tempo de coleta):** a coleta completa contra `@caroline_tanaka` (endpoint nativo quebrado em 100% dos posts) levou **123,2s**, ainda acima do critério de <60s — causado pelo próprio retry/rate-limiter interno do Instaloader (`max_connection_attempts=2` + `RateController.wait_before_query`) ao tentar o endpoint nativo antes de cair no fallback, não pelo pacing próprio deste projeto (já reduzido para 0.3-0.8s conforme pedido). Deliberadamente **não** reduzido para `max_connection_attempts=1`/rate-limiter mais agressivo: isso removeria a margem de segurança contra bloqueio/checkpoint da conta real usada na coleta (`elafashiomkt`) para ganhar velocidade só no caso já raro em que o endpoint nativo está 100% quebrado. Registrado como física, não escondida.
+  * **Bug latente corrigido no exportador PDF:** `generate_pdf_report` usava a fonte core `helvetica` do fpdf2 (charset latin-1); texto do parecer local (`ai_local.build_local_opinion`) contém travessão tipográfico (`—`), o que sempre existiu no código mas nunca quebrava porque BQI/CI ficavam `indisponivel` em toda auditoria real (o texto afetado só aparece quando BQI/CI/SD estão todos resolvidos). O Modo Demonstração é o primeiro caminho a exercitar esse estado e expôs o bug (`FPDFUnicodeEncodingException`) — corrigido com uma transliteração determinística para ASCII/latin-1 (`_safe_text`) em vez de trocar a fonte, preservando o PDF determinístico byte-a-byte (governança ISSUE-006 §5). Coberto por teste de regressão (`test_generate_pdf_report_never_crashes_on_typographic_punctuation`).
+  * **Modo Demonstração (`src/app.py`):** botão "Carregar Exemplo (Demo)" ao lado de "Auditar Perfil" — dataset fictício (15 posts de moda feminina, 80 comentários já categorizados A/B/C/D, `p2_inputs`/`weekly_consistency` simulados) roteado pelo mesmo pipeline real (`_build_report`: Demografia → Métricas → Render/Export), nunca toca cache/Instaloader. Único caminho hoje que popula BQI/CI (70,3 saudável / 91,2 consistente) para demonstrar o dashboard 100% preenchido; nunca confundido com dado real (`status_coleta="Modo demonstração (dados fictícios)"` dedicado). Validado sem exceções via `AppTest` (`tests/test_integration_e2e.py::test_demo_flow_*`).
+  * **Refinamento visual (`src/app.py`):** CSS escopado para `st.text_input`/`st.selectbox` (fundo `#FFFFFF`, borda `1px solid #E5E0D8`, foco `#810100`, substituindo o `secondaryBackgroundColor` global do tema que deixava esses dois widgets amarelados); Distribuição de Formatos e Tipologia de Comentários trocados de `st.bar_chart` para barras de progresso proporcionais/horizontais (`st.progress`) com rótulos explícitos e destaque de V_AB; Top 3 Estados trocado de `st.dataframe` para chips (`:primary-badge[...]`); tamanho da fonte `IBM Plex Mono` dos `st.metric` ajustado para não estourar os cards.
+  * **Cache stale limpo:** entradas antigas (0 comentários) de `caroline_tanaka`/`carolina_tanaka` removidas de `data/cache.db` para forçar a nova coleta funcional — `caroline_tanaka` já recacheado com os 113 comentários reais coletados nesta validação.
+  * **Validação em navegador:** não realizada nesta sessão — a extensão Claude in Chrome não estava conectada no ambiente. O app foi validado via `streamlit.testing.v1.AppTest` (fluxo real, cache, Modo Demo, exportação) e subido localmente (`http://localhost:8501`, HTTP 200) para conferência visual manual.
+  * **Suíte completa após a correção:** ✅ **138/138 passando** (`test_coleta` 20 + `test_demographics` 13 + `test_metrics` 50 + `test_relatorios` 14 + `test_ai_integration` 33 + `test_integration_e2e` 12 — incluindo `test_collect_profile_extends_window_when_too_few_recent_posts`, `test_fetch_post_comments_falls_back_to_graphql_when_native_endpoint_fails`, `test_generate_pdf_report_never_crashes_on_typographic_punctuation` e `test_demo_flow_*`).
 
-## Sprint 002 — Fase 4: Top Posts, Tags/Menções e Demografia Expandida (2026-08-14)
-Quarta fase da Sprint 002 (worktree `mede-dodo-sprint002-fase4`, criado a partir de `main`
-pós-Fase 3), conforme `SPRINT-002/BENCHMARK-001.md` §4.4/§4.5 e `SPRINT-002/ISSUE-001.md`
-§4.1/§4.5/§5.9/§7.3. Fecha o catálogo de conteúdo/afinidade e expande a demografia com
-metadados de cobertura amostral, mantendo o mesmo envelope autodescritivo (`value`/`unit`/
-`kind`/`source`/`confidence`/`status`/`ressalvas`) usado pelas Fases 1-3.
+---
 
-- **`src/metrics.py`** — `build_audit_report(posts, followers_count, names_db=None,
-  ddd_to_uf=None)` ganhou 5 novos campos em `metrics` (de 7 para 12; `provenance` de 7 para
-  12 entradas). `names_db`/`ddd_to_uf` são injetáveis (mesmo padrão de
-  `demographics.infer_gender`/`infer_region`), com fallback para os conjuntos de exemplo de
-  `src/demographics.py` quando não informados — o pipeline real (`app.py`) passa a base IBGE
-  completa já carregada por `data_loaders`.
-  - `top_posts` (`extract_top_posts(posts, limit=3, followers_count=None)`): ranking
-    determinístico por engajamento absoluto (likes + comments) descendente, com engajamento
-    relativo (sobre `followers_count`, quando informado) anexado a cada item — shortcode,
-    link (`https://www.instagram.com/p/{shortcode}/`), data, tipo de mídia, likes, comments.
-    Não depende do Gemini nem de `campaign_insights`.
-  - `popular_tags` (`extract_popular_tags(posts, limit=10)`): frequência de hashtags nas
-    legendas já coletadas (`post.raw.caption`), só regex local, case-insensitive.
-  - `brand_mentions` (`extract_brand_mentions(posts, limit=10)`, RF-09): frequência de
-    menções `@handle` nas legendas, separando `publi_confirmada` de `mencao_organica` — uma
-    menção isolada NÃO é marcada como publi; só quando a mesma legenda também contém
-    linguagem explícita de patrocínio (`filters.SPONSORED_PATTERNS`, o mesmo critério de
-    `filters.detect_sponsored_posts`). Ressalva explícita sempre presente (ISSUE-001.md
-    §4.5: "uma menção não é prova suficiente de publicidade").
-  - `gender_distribution`/`region_distribution`: envelopes em torno de duas novas funções
-    puras em `src/demographics.py` (`summarize_gender_distribution`,
-    `summarize_region_distribution_with_coverage`), computadas sobre os comentários já
-    presentes em `post.raw.comments`. `value` é a cobertura em percentual (comentários com
-    gênero/UF identificado sobre o total da amostra) — não o universo de seguidores do
-    perfil; ressalva fixa carregada em ambos (BENCHMARK-001.md §4.4/§7.3).
-  - `indisponivel`/`value=None` sem posts (top_posts), sem legendas com hashtag/menção
-    (popular_tags/brand_mentions) ou sem comentários coletados (gender/region), nunca lança
-    exceção — mesmo padrão das Fases 1-3.
-- **`src/demographics.py`** — `summarize_gender_distribution(comments, names_db=...)` e
-  `summarize_region_distribution_with_coverage(comments, ddd_to_uf=..., region_keywords=...)`
-  reaproveitam a mesma heurística nome-explícito-ou-@handle e DDD/menção já usada por
-  `app.py`, mas como funções puras testáveis isoladamente, devolvendo contagens, percentuais
-  e cobertura.
-- **`app.py`** — `_run_pipeline` passa `names_db`/`ddd_to_uf` (já carregados via
-  `data_loaders`) para `build_audit_report`. `_render_demografia_card` ganhou as duas linhas
-  de cobertura amostral + ressalva. Três novos cards, todos com fallback gracioso
-  (`exporter.TOP_POSTS_VAZIO_MSG`/`POPULAR_TAGS_VAZIO_MSG`/`BRAND_MENTIONS_VAZIO_MSG` quando
-  a métrica está indisponível): `_render_top_posts_card`, `_render_popular_tags_card`,
-  `_render_brand_mentions_card` (com ressalva RF-09 exibida). Chamados a partir de `main()`
-  no mesmo layout de duas colunas já existente.
-- **`src/exporter.py`** — três novas mensagens de estado vazio (mesmo padrão de
-  `PUBLIS_VAZIO_MSG`) e três novas seções, no HTML (`<h2>Top 3 Posts</h2>` com tabela,
-  `<h2>Hashtags populares</h2>` e `<h2>Menções de marcas</h2>` como listas) e no PDF
-  (mesmo conteúdo em `pdf.cell`/`pdf.multi_cell`, sempre com `new_x`/`new_y` explícitos nos
-  loops — evita a classe de regressão `FPDFException` já documentada na Fase 2). Seção
-  Demografia (HTML e PDF) ganhou as linhas de cobertura amostral. `audit_report` ausente ou
-  métrica `indisponivel` → estado vazio explícito, nunca exceção.
-- **Testes**: +22 em `tests/test_metrics.py` (as 3 funções de extração + os 2 envelopes de
-  demografia, isoladamente e via `build_audit_report`, mais o novo formato estrutural de 12
-  campos), +6 em `tests/test_demographics.py` (as 2 novas funções puras), +6 em
-  `tests/test_exporter.py` (seções presentes/ausentes em HTML e PDF, cobertura demográfica no
-  HTML), +8 em `tests/test_app.py` (integração real via `_run_pipeline` em Modo Demonstração
-  — `demo_fetch_fn` sempre gera ≥2 posts patrocinados com hashtag/menção, `i % 3 == 0`
-  determinístico —, robustez dos 3 novos `_render_*` sem `audit_report`, e 1 `AppTest` fim a
-  fim confirmando os 3 novos subheaders renderizados na tela real). **Suíte completa: 268 →
-  300 testes, 100% verde** (`.venv/bin/python -m pytest tests/`).
-- Verificação visual em navegador real não foi possível nesta sessão (mesmo motivo da Fase
-  3 — ambiente de background sem extensão Chrome conectada); a cobertura via `AppTest`
-  confirma os subheaders/conteúdo renderizados, mas fica como pendência de validação visual
-  manual.
+## 🛡️ 4. Controle de Integração e Desvios
 
-## Sprint 002 — Rodada final de fechamento (2026-08-14)
-Rodada de fechamento formal da Sprint 002, executada em modo autônomo (worktree
-`mede-dodo-sprint002-fase4`, base para integração em `main`), cobrindo enriquecimento das
-fixtures de demonstração, sanity check do exportador/UI e bateria de testes fim-a-fim.
-**Nota de execução**: o merge fast-forward e a remoção do worktree ficaram inicialmente
-bloqueados dentro da sessão isolada no próprio worktree — o harness recusa qualquer comando
-Git que redirecione (via `cd`, `-C` ou equivalente) para o checkout principal a partir de lá,
-e um subagente dedicado herdou o mesmo bloqueio. A saída foi `ExitWorktree(action: "keep")`,
-que devolveu a sessão ao checkout principal preservando o worktree em disco — só então o
-merge (fast-forward puro `888354b..4b043db`), a suíte completa (305/305 verde, revalidada no
-checkout principal) e a limpeza do worktree puderam ser concluídos, todos nesta mesma sessão.
+* **Verificação de Acoplamento:** `src/app.py` permanece 100% View pura — zero `sqlite3`/`requests`/`urllib3` importados nela; os únicos acoplamentos são chamadas a serviços internos (`get_secret()` de `features/coleta/`, `estimate_gender_distribution`/`estimate_location_by_ddd` de `features/analise/`), conforme SPEC-001 §3.2.
+* **CSS Injection:** único bloco centralizado (`_CUSTOM_CSS` em `src/app.py`), escopado via seletores estáveis `.st-key-card_*` (gerados por `key=` em `st.container`) — não usa framework CSS externo, conforme DUMMY.md/ISSUE-003 restrição 3.
+* **Desvios Mapeados:** Nenhum desvio detectado nesta sessão.
 
-- **`app.py` (`demo_fetch_fn`)** — `DEMO_CAPTION_TEMPLATES_ORGANIC`/`_SPONSORED` ampliados
-  (de 2 para 4 e de 2 para 3 legendas, respectivamente) para incluir hashtags de moda/
-  lifestyle reais (`#moda`, `#lookdodia`, `#tendencia`) e a menção `@estudioela`/
-  `@marca_parceira` exigidas nesta rodada, além dos termos de publi (`#publi`/`#ad`,
-  `@marca_fashion_demo`/`@outra_marca_demo`) já existentes desde a Fase 4. O restante do
-  fixture (Reels com `video_view_count`, imagens/carrosséis alternados, ≥2 posts
-  patrocinados determinísticos via `i % 3 == 0`, comentários qualificados cobrindo as 5
-  categorias de intenção comercial — preço/tecido/tamanho/envio/loja —, comentários rasos/
-  emoji para o filtro, respostas da criadora para `creator_response_rate` e repetição de
-  `pod_accounts` entre posts para o `pod_index`) já atendia integralmente ao pedido desde a
-  Fase 4 — não precisou de alteração estrutural, só de vocabulário mais rico nas legendas.
-- **Correção de UI**: `main()` prometia exportação em "HTML/PDF/JSON" na mensagem de sucesso
-  pós-conclusão, mas `_render_export_buttons` só implementa os botões HTML e PDF (nunca
-  existiu exportação JSON) — texto corrigido para não prometer um formato inexistente.
-- **`src/exporter.py`** — sanity check dirigido por 4 novos testes (`tests/test_exporter.py`)
-  cobrindo `generate_html_report`/`generate_pdf_report` sobre `build_audit_report` real nos
-  cenários: com Reels + publis, sem nenhum Reel (`engagement_rate_by_views` degrada para
-  `indisponivel`), sem nenhuma publi/menção (`popular_tags`/`brand_mentions` indisponíveis) e
-  amostra vazia (todas as 12 métricas indisponíveis) — nenhum dos dois exportadores lança
-  exceção em nenhum cenário, confirmando o comportamento já implementado nas Fases 1-4.
-- **`app.py`** — sanity check de UI: 1 novo teste `AppTest` fim a fim confirma título
-  ("métricaDODÔ"), subheader "Sessão do Instagram" na sidebar, badge de Modo Demonstração,
-  mensagem de sucesso corrigida (sem "JSON") e os dois botões de exportação
-  ("Baixar relatório (HTML)"/"Baixar relatório (PDF)") após o clique em "Ver Relatório".
-  **Nota de teste**: esse teste precisou ser posicionado logo após outro teste baseado em
-  `AppTest` (não ao final do arquivo) — reproduzimos, reordenando dois testes já existentes,
-  uma fragilidade pré-existente do ambiente (`streamlit==1.61.1` + Python 3.14.6): quando um
-  teste "bare" (`import app` direto, sem `AppTest`) roda imediatamente antes de um teste
-  `AppTest`, o próximo `st.form()` falha com `StreamlitAPIException: Forms cannot be nested
-  in other forms` por contaminação de estado global entre execuções — não é um defeito da
-  aplicação, e o mesmo padrão de adjacência (testes `AppTest` agrupados) já era seguido pelos
-  testes anteriores da Sprint 002.
-- **Launcher macOS (`iniciar_app.command`)** — validado íntegro: `chmod +x` já presente
-  (`rwxr-xr-x`), `bash -n` sem erro de sintaxe, cria `.venv` local sob demanda, instala
-  `requirements.txt` e delega para `.venv/bin/streamlit run app.py`. Nenhuma alteração
-  necessária.
-- **Suíte completa**: 300 → **305 testes, 100% verde**, confirmada em duas execuções
-  consecutivas de `.venv/bin/python -m pytest tests/` (18-19s cada, sem flakiness residual
-  nesta sessão). Ambiente local desta sessão precisou de `.venv` próprio (worktree não herda
-  `.venv` do checkout principal, ignorado via `.gitignore`) — `python3 -m venv .venv && 
-  .venv/bin/python -m pip install -r requirements.txt`.
+---
+## 🧠 5. ISSUE-005 — Heurística Local + Gemini (implementada)
+* **Arquitetura:** heurística local primeiro, Gemini 2.5 Flash como único provedor de IA, sem Claude/Anthropic na v2.0.0 (ADR-003).
+* **Status físico:** ✅ implementado e testado — `ai_local.py`, `ai_gemini.py` e `tests/test_ai_integration.py` existem e passam (33/33). Ver §3 para o detalhamento dos testes.
+* **Fallback:** modo convidado (`client=None`), rate limit (`GeminiRateLimitError`) ou schema inválido degradam explicitamente para heurística local (`local_fallback`) ou `indisponivel` — nunca silenciosamente.
+* **Nota histórica:** esta seção descrevia a ISSUE-005 como pendente de implementação até 2026-08-15; o `manifest.json`, porém, já a marcava `"done"` antes disso — divergência descoberta e corrigida durante a homologação da ISSUE-007 (ver §1).
 
-### Checklist de prontidão para testes de usuário
-- [x] Suíte automatizada 100% verde (305/305).
-- [x] Modo Demonstração gera um perfil fictício completo (Reels/imagens/carrosséis,
-      hashtags e menções de moda/lifestyle, ≥2 publis, comentários ricos) sem depender de
-      rede — pronto para demonstração visual ponta a ponta.
-- [x] Exportador HTML/PDF validado contra os 4 cenários de dados possíveis (completo, sem
-      Reels, sem publis, amostra vazia) sem exceção.
-- [x] Mensagens da UI (badges, sidebar, botões de exportação) auditadas e consistentes com o
-      que de fato é entregue (removida promessa de exportação JSON inexistente).
-- [x] Launcher `iniciar_app.command` íntegro e executável.
-- [ ] **Pendente**: validação visual manual no navegador real (nenhuma sessão desta Sprint
-      teve acesso à extensão Chrome em ambiente de background — pendência recorrente desde a
-      Fase 3/4, não resolvida nesta rodada).
-- [x] Merge fast-forward `worktree-mede-dodo-sprint002-fase4` → `main` (`888354b..4b043db`)
-      concluído; suíte revalidada no checkout principal (305/305 verde); worktree removido
-      (`git worktree remove` + `git worktree prune`).
-- [ ] Backlog remanescente (BENCHMARK-001.md/ISSUE-001.md, não coberto nesta rodada):
-      histórico comercial/colaborações (P2), validação de `RealGeminiClient` contra a API
-      real do Gemini (ISSUE-0003), calibração do Score DODÔ com dados reais.
+## 🚀 6. Status de Conclusão da v2.0.0 — MVP Homologado
 
-## Sprint 002 — Refatoração editorial de UI/UX (SPEC-002, 2026-08-14)
-Execução em modo autônomo (worktree `worktree-sprint-002-ui-refactor`) da especificação de
-refatoração editorial da tela de relatório, aprovada e implementada nesta rodada — a rodada
-de fechamento anterior (seção acima) havia encerrado a Sprint 002 do ponto de vista de dados/
-fixtures/exportador, mas a reorganização visual proposta pela SPEC ainda não tinha sido
-aplicada a `app.py`. Especificação versionada primeiro em `SPRINT-002/SPEC-001.md`
-(commit `docs(sprint-002)`) e depois realocada para o local canônico `specs/SPEC-002.md`
-(numeração sequencial após `specs/SPEC-001.md`, o MVP original).
+| Issue | Status | Observação |
+|---|---|---|
+| ISSUE-001 | ✅ done | Scaffold visual, View Pura |
+| ISSUE-002 | ✅ done | Coleta/Cache/Gatekeeper — bug de coleta de comentários encontrado na homologação (§3) **corrigido em 2026-08-16** via fallback GraphQL + janela inteligente |
+| ISSUE-003 | ✅ done | Refinamento visual & demografia |
+| ISSUE-004 | ✅ done | Rodada 1 (ER Branding) + Rodadas 2/3 (tipologia/P1, P2, P3, BQI, CI, SD, parecer combinado) via ADR-002; BQI/CI seguem `indisponivel` em auditorias reais (Pilar 2 sem dado coletável — lacuna física documentada, não escondida) |
+| ISSUE-005 | ✅ done | Heurística local + Gemini 2.5 Flash |
+| ISSUE-006 | ✅ done | Exportação PDF/CSV |
+| ISSUE-007 | ✅ done | Orquestração end-to-end + homologação real contra 3 perfis do Instagram |
 
-- **`app.py`** — camada de renderização (`_render_report_page` e as 10 funções que
-  compõem, em ordem, a arquitetura de informação da SPEC: cabeçalho do perfil, leitura para
-  contratação, KPIs principais, formatos e Reels, qualidade da audiência, qualidade e
-  conteúdo, perfil da audiência, comentários e intenção, detalhes da auditoria e exportação)
-  reescrita do zero sobre os mesmos dados de `analysis` já calculados por `_run_pipeline`
-  (nenhuma fórmula/heurística de coleta, score, antifraude, demografia ou Gemini foi tocada —
-  só apresentação, nomenclatura e agrupamento). KPIs principais agora usam sempre
-  `st.columns(2)` em vez de `st.columns(3)`/`st.columns(4)` (UI-01/UI-02); grades assimétricas
-  usam `st.columns([1.35, 1])`. Nomenclatura canônica da SPEC aplicada (ex.: "Taxa de
-  engajamento" → "Engajamento por seguidores", "Índice de pods"/"Antifraude" → "Sinal de
-  interação coordenada"/"Qualidade da audiência", "Publis" → "Parcerias identificadas",
-  "Demografia da audiência" → "Perfil da audiência (estimativa)"), com a microcopy exigida na
-  seção 5 da SPEC anexada via `help=` dos `st.metric` (tooltip nativo do Streamlit,
-  navegável por teclado) e badges de procedência (`observado`/`derivado`/`estimado`) como
-  `st.caption` abaixo de cada indicador. Dados brutos, tabela completa de itens do Gemini e o
-  card de proveniência técnica foram movidos para dentro de um único
-  `st.expander("Detalhes da auditoria", expanded=False)` (UI-09). Tokens do Design System
-  Criativo Dodô (Creme Cannoli/Branco Brilhante/Ônix/Vermelho Haute/Dália Vermelha/Cinza
-  Espuma) aplicados via injeção de CSS (`_inject_design_system_css`) sobre fundo, cards
-  (`st.container(border=True)`/expander), botões (raio 999px, hover invertido, foco em
-  Vermelho Haute) e a faixa de acento de 6px da "Leitura para contratação" — nenhuma cor,
-  fonte ou raio fora da tabela de tokens da SPEC foi usado (UI-11). Campo aditivo
-  `analysis["data_coleta"]` (lido de `profiles.updated_at`, já existente no cache SQLite) 
-  passou a alimentar o cabeçalho do perfil; nenhum campo existente de `analysis` foi removido
-  ou renomeado internamente (UI-04/§2.2).
-- **`src/exporter.py`** — cabeçalhos de seção do HTML/PDF realinhados à mesma nomenclatura e
-  ordem (Métricas principais → Qualidade da audiência → Qualidade e conteúdo → Perfil da
-  audiência → Comentários e intenção → Proveniência e Escopo das Métricas), sem alterar
-  nenhuma função de cálculo/formatação de dado (UI-13/UI-14) — só os textos de `<h2>`/`<h3>`
-  no HTML e os títulos de seção no PDF.
-- **TDD** — `tests/test_app.py` e `tests/test_exporter.py` atualizados para a nova
-  nomenclatura/estrutura (funções renomeadas: `_render_top_posts_card` →
-  `_render_posts_maior_repercussao`, `_render_popular_tags_card` →
-  `_render_hashtags_populares`, `_render_brand_mentions_card`/`_render_publis_card` →
-  `_render_parcerias_identificadas`, `_render_demografia_card` → `_render_audience_profile`).
-  **Suíte completa: 305 → 305 testes, 100% verde** (mesma contagem da rodada anterior — a
-  refatoração reorganizou a UI sem adicionar/remover cobertura de teste; `.venv/bin/python -m
-  pytest tests/`).
-- **Smoke test real**: `.venv/bin/python -m streamlit run app.py --server.headless=true`
-  iniciado e confirmado escutando (porta local), sem exceção no boot — validação de que a
-  reescrita completa da camada de renderização não quebra a inicialização real do app, além
-  da cobertura via `AppTest`.
+A v2.0.0 está **operacional em modo real** e homologada contra perfis reais do Instagram: coleta real (incluindo comentários, via fallback GraphQL desde 2026-08-16), cache real (<1s confirmado), demografia real, triagem A/B/C/D real, ER Branding e Saturação de Publis (SD) reais, exportação PDF/CSV real, e um Modo Demonstração para exercitar o dashboard 100% preenchido sem depender da rede do Instagram. Uma lacuna física permanece conhecida e documentada — nunca escondida ou fabricada para fechar a issue artificialmente:
+1. **BQI completo e CI em auditorias reais** dependem de sinais (`save_rate`/`share_rate`/`VTR`/`alcance_qualificado`; piso do CI) que a coleta pública via Instaloader não expõe — aparecem como "Indisponível" (o Modo Demonstração simula esses sinais só para fins de visualização, nunca em dado real).
 
-### Checklist de critérios de aceite (SPEC-002 §11)
-- [x] UI-01/UI-02/UI-03 — sem `st.columns(3)`/`st.columns(4)` nos KPIs principais; grade de
-      2 colunas com `gap="large"`; primeiro nível com cabeçalho + leitura para contratação +
-      4 KPIs.
-- [x] UI-04/UI-05/UI-06/UI-07 — nomenclatura canônica aplicada sem alterar chaves internas;
-      tooltip exata do "Sinal de interação coordenada"; badges/cobertura amostral junto dos
-      indicadores.
-- [x] UI-08 — estados `indisponível` nunca formatados como `0,00%` (engajamento por views e
-      autenticidade da audiência têm ramo explícito de fallback).
-- [x] UI-09 — números brutos, itens Gemini e fórmulas só em "Detalhes da auditoria".
-- [x] UI-10 — disclaimer de revisão humana sempre presente na "Leitura para contratação",
-      com ou sem Gemini configurado.
-- [x] UI-11 — só tokens do Design System Criativo Dodô usados na injeção de CSS.
-- [x] UI-12/UI-13/UI-14 — fluxo de análise/progresso/erro/exportação preservado; nenhuma
-      fórmula/heurística/exportador alterado; HTML/PDF continuam acessíveis.
-- [x] Suíte automatizada 100% verde (305/305).
-- [ ] **Pendente**: validação visual manual no navegador real (mesma pendência recorrente
-      das rodadas anteriores — sem acesso à extensão Chrome em ambiente de background nesta
-      sessão).
-- [ ] **Pendente (ação manual do usuário)**: sincronização com o Google Drive — a skill
-      `/drive` tem trava contra invocação automática por IA (`disable-model-invocation`);
-      rodar `/drive` manualmente no terminal para atualizar os documentos espelhados.
+Lacuna anterior resolvida em 2026-08-16: a coleta de comentários, que falhava sistematicamente contra o endpoint nativo do Instagram em pelo menos 2 dos 3 perfis testados, agora recupera comentários reais via um fallback GraphQL portado da v1.0.0 legada (ver §3).
+
+Ambas ficam registradas como pendências físicas explícitas para issues futuras, fora do escopo desta homologação.

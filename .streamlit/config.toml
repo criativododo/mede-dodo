@@ -1,0 +1,24 @@
+# Tema Dodô — tokens do Design System (Paper Desktop 1:1)
+# Fonte: DUMMY.md e specs/SPEC-001.md (Seção 2: Contrato Visual & Design System Dodô)
+# Alterar cores/fontes SOMENTE aqui — nunca via CSS solto em src/app.py.
+
+[theme]
+base = "light"
+
+backgroundColor = "#F5F4EC"            # Cannoli
+secondaryBackgroundColor = "#EFECDF"   # Cannoli, um tom mais escuro (widgets/code)
+primaryColor = "#810100"               # Vermelho Haute
+textColor = "#241B1A"
+borderColor = "#E5E0D8"
+linkColor = "#810100"
+
+showWidgetBorder = true
+baseRadius = "12px"
+buttonRadius = "12px"
+
+font = "'Elms Sans', 'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap"
+headingFont = "'Work Sans':https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&display=swap"
+codeFont = "'IBM Plex Mono':https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+
+# Paleta categórica autoral (terrosa, sem gradientes/paletas externas)
+chartCategoricalColors = ["#810100", "#3F3229", "#B08968", "#C9C2B3"]
