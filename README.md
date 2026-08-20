@@ -1,5 +1,9 @@
 # 🦤 métricaDODÔ (MedeDodo) — v2.0.0
 
+## Repositório no GitHub
+
+O código-fonte e o histórico de versões deste projeto estão disponíveis no repositório privado [criativododo/mede-dodo](https://github.com/criativododo/mede-dodo).
+
 > [!IMPORTANT]
 > **DIRETRIZ DE ONBOARDING PARA AGENTES DE IA (Claude Code / Gemini Spark / Manus):**
 > Antes de realizar qualquer varredura de código-fonte, inspeção de arquivos ou refatoração neste repositório, você deve obrigatoriamente ler o arquivo **`DUMMY.md`** na raiz. Ele contém o mapa físico real do projeto, as travas de segurança e as restrições negativas ("O que NÃO fazer") que regem este software.
